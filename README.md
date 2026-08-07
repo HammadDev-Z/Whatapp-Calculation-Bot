@@ -150,8 +150,9 @@ Only authorized users in groups are processed. Unauthorized users and private ch
 500/2
 100+50
 900-200
-(50*4)+100
 ```
+
+Messages must contain only the calculation itself. The bot ignores mixed chat such as `Bas 628 done kr do`.
 
 ### Direct Adjustments
 
@@ -201,7 +202,7 @@ Automate daily backups on your server and store copies off-machine.
 - **Bot ignores messages**: confirm the chat is a group and `AUTHORIZED_NUMBERS` contains the sender number with country code.
 - **Database errors**: verify `DATABASE_URL`, PostgreSQL service status, and run `npm run migrate`.
 - **Duplicate messages ignored**: expected behavior if WhatsApp replays an already processed message.
-- **Invalid calculation**: only digits, decimal points, spaces, `+`, `-`, `*`, `/`, and parentheses are allowed.
+- **No reply to chat**: messages must be only direct numeric calculations like `89-54`, `-7`, `78`, or `5*5`.
 
 ## Development
 

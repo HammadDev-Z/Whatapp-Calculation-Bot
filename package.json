@@ -1,0 +1,35 @@
+{
+  "name": "whatsapp-calculator-bot",
+  "version": "1.0.0",
+  "description": "Production-ready WhatsApp group calculator/accounting bot.",
+  "main": "src/app.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/app.js",
+    "test": "jest --runInBand",
+    "migrate": "node src/database/migrations.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "calculator",
+    "accounting",
+    "postgresql"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "decimal.js": "^10.4.3",
+    "dotenv": "^16.4.5",
+    "mathjs": "^12.4.2",
+    "pg": "^8.12.0",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.25.0",
+    "winston": "^3.13.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,16 @@
+node_modules
+node_modules/
+node_modules/**
+npm-debug.log*
+.env
+.env.*
+.whatsapp-session
+.whatsapp-session/
+.whatsapp-session/**
+coverage
+coverage/
+coverage/**
+.git
+.git/
+.git/**
+.gitignore
