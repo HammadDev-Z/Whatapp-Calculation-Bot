@@ -240,7 +240,8 @@ function createMessageHandler(pool) {
       if (!chat?.isGroup) return;
 
       const senderIdentity = await getSenderIdentity(message);
-      if (!isAnyAuthorized(senderIdentity.values)) {
+      // Empty AUTHORIZED_NUMBERS => allow every sender in the group.
+      if (config.authorizedNumbers.length > 0 && !isAnyAuthorized(senderIdentity.values)) {
         logger.info('Ignoring unauthorized WhatsApp sender', {
           senderId: senderIdentity.rawSenderId,
           detectedIds: senderIdentity.values,
@@ -277,7 +278,7 @@ function createMessageHandler(pool) {
       });
       try {
         const senderIdentity = await getSenderIdentity(message);
-        if (isAuthorized(senderIdentity.number) || isAnyAuthorized(senderIdentity.values)) {
+        if (config.authorizedNumbers.length === 0 || isAuthorized(senderIdentity.number) || isAnyAuthorized(senderIdentity.values)) {
           await message.reply('Something went wrong while processing your request.');
         }
       } catch (replyError) {
