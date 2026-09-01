@@ -7,8 +7,9 @@ services:
       POSTGRES_DB: whatsapp_calculator
       POSTGRES_USER: whatsapp_bot
       POSTGRES_PASSWORD: whatsapp_bot_password
-    ports:
-      - "5432:5432"
+    # Not published to the host — the bot reaches Postgres over the compose
+    # network as `postgres:5432`. Add a `ports:` mapping back only if you need
+    # to connect from the host, and pick a free port (e.g. "5433:5432").
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
