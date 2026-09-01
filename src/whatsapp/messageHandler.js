@@ -10,7 +10,13 @@ const {
   resetGroup,
   undoLatest
 } = require('../services/transactionService');
-const { formatCompactMoney, formatExpression, formatMoney } = require('../utils/formatter');
+const {
+  formatCompactMoney,
+  formatExpression,
+  formatMoney,
+  formatPlainNumber,
+  formatCalculationExpression
+} = require('../utils/formatter');
 const logger = require('../utils/logger');
 
 const resetRequests = new Map();
@@ -213,15 +219,16 @@ async function handleCalculation(pool, chat, message, senderNumber, text) {
 
   if (result.duplicate) return null;
 
-  const expressionLine = calculation.transactionType === 'adjustment'
-    ? formatCompactMoney(calculation.amount)
-    : `① ${formatExpression(calculation.expression)}=${formatCompactMoney(calculation.amount)}`;
+  const resultText = formatPlainNumber(calculation.amount);
+  const allTotal = formatPlainNumber(result.group.current_total);
 
   return [
-    getHeader(result.group),
-    expressionLine,
-    `Cur Total: ${formatCompactMoney(calculation.amount)}`,
-    `All Total:${formatCompactMoney(result.group.current_total)}`
+    '💥 CALCULATION',
+    '',
+    `${formatCalculationExpression(calculation.expression)} = ${resultText}`,
+    '',
+    `💰 Total: ${resultText}`,
+    `📊 Due/Advance: ${allTotal}`
   ].join('\n');
 }
 
