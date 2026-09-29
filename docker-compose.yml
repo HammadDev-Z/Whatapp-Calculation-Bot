@@ -27,9 +27,6 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://whatsapp_bot:whatsapp_bot_password@postgres:5432/whatsapp_calculator
-      AUTHORIZED_NUMBERS: ${AUTHORIZED_NUMBERS:-}
-      HISTORY_DEFAULT_LIMIT: ${HISTORY_DEFAULT_LIMIT:-10}
-      HISTORY_MAX_LIMIT: ${HISTORY_MAX_LIMIT:-50}
       WHATSAPP_SESSION_PATH: /app/.whatsapp-session
       CHROME_EXECUTABLE_PATH: /usr/bin/chromium
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -47,9 +44,7 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://whatsapp_bot:whatsapp_bot_password@postgres:5432/whatsapp_calculator
-      AUTHORIZED_NUMBERS: ${AUTHORIZED_NUMBERS:-}
-      HISTORY_DEFAULT_LIMIT: ${HISTORY_DEFAULT_LIMIT:-10}
-      HISTORY_MAX_LIMIT: ${HISTORY_MAX_LIMIT:-50}
+      CALCULATION_REPORT_GROUP_ID: ${CALCULATION_REPORT_GROUP_ID:-}
       WHATSAPP_SESSION_PATH: /app/.whatsapp-session
       CHROME_EXECUTABLE_PATH: /usr/bin/chromium
       LOG_LEVEL: ${LOG_LEVEL:-info}

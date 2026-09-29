@@ -1,15 +1,28 @@
-const { formatCompactMoney, formatExpression } = require('../src/utils/formatter');
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { formatAmount } = require('../src/utils/formatter');
+const { randomDelayMs } = require('../src/utils/delay');
 
-describe('formatter', () => {
-  test('formats whole values with one decimal', () => {
-    expect(formatCompactMoney('25')).toBe('25.0');
-  });
+const amounts = [
+  ['30.00', '30.0'],
+  ['1200.00', '1200.0'],
+  ['-900.00', '-900.0'],
+  ['0.00', '0.0'],
+  ['-0.00', '0.0'],
+  ['12.50', '12.50'],
+  ['0.05', '0.05'],
+  [100, '100.0']
+];
 
-  test('keeps two decimals when cents exist', () => {
-    expect(formatCompactMoney('251.60')).toBe('251.60');
+for (const [input, output] of amounts) {
+  test(`formatAmount(${JSON.stringify(input)}) -> ${output}`, () => {
+    assert.equal(formatAmount(input), output);
   });
+}
 
-  test('formats multiplication symbol for WhatsApp replies', () => {
-    expect(formatExpression('5*5')).toBe('5×5');
-  });
+test('randomDelayMs returns whole seconds within the inclusive range', () => {
+  assert.equal(randomDelayMs(3, 6, () => 0), 3000);
+  assert.equal(randomDelayMs(3, 6, () => 0.26), 4000);
+  assert.equal(randomDelayMs(3, 6, () => 0.5), 5000);
+  assert.equal(randomDelayMs(3, 6, () => 0.9999), 6000);
 });

@@ -1,62 +1,68 @@
-const { calculate, hasAnyDigit, looksLikeCalculation } = require('../src/services/calculatorService');
-const { formatMoney } = require('../src/utils/formatter');
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { parseCalculation } = require('../src/services/calculatorService');
 
-describe('calculatorService', () => {
-  test('calculates multiplication with decimals', () => {
-    const result = calculate('5*50.32');
-    expect(formatMoney(result.amount)).toBe('251.60');
-  });
+const expressions = [
+  ['10+20-5', '25.00'],
+  ['4*6-8', '16.00'],
+  ['3-8+50', '45.00'],
+  ['30/4+70', '77.50'],
+  ['90.29/3', '30.10'],
+  ['90.38÷5', '18.08'],
+  ['2560+32+487-273', '2806.00'],
+  ['2+3*4-10/5', '12.00'],
+  ['1/3*3', '1.00'],
+  ['.5+.5', '1.00'],
+  ['0.005+0', '0.01'],
+  ['2.675+0', '2.68'],
+  ['0.004+0', '0.00'],
+  ['12/05/2026', '0.00'],
+  ['0300-1234567', '-1234267.00'],
+  ['5-5', '0.00'],
+  ['0/5+0', '0.00'],
+  ['0-0.001', '0.00'],
+  ['1+'.repeat(99) + '1', '100.00']
+];
 
-  test('calculates whole-number multiplication', () => {
-    const result = calculate('10*30');
-    expect(formatMoney(result.amount)).toBe('300.00');
+for (const [input, amount] of expressions) {
+  test(`expression ${JSON.stringify(input.length > 30 ? `${input.slice(0, 12)}… (${input.length} chars)` : input)} -> ${amount}`, () => {
+    assert.deepEqual(parseCalculation(input), { expression: input, amount, type: 'expression' });
   });
+}
 
-  test('supports positive adjustments', () => {
-    const result = calculate('+500');
-    expect(result.transactionType).toBe('adjustment');
-    expect(formatMoney(result.amount)).toBe('500.00');
-  });
+test('trims surrounding whitespace but keeps internal spacing and newlines', () => {
+  assert.deepEqual(parseCalculation(' 10 + 20 '), { expression: '10 + 20', amount: '30.00', type: 'expression' });
+  assert.deepEqual(parseCalculation('10+\n20'), { expression: '10+\n20', amount: '30.00', type: 'expression' });
+});
 
-  test('supports negative adjustments', () => {
-    const result = calculate('-400');
-    expect(result.transactionType).toBe('adjustment');
-    expect(formatMoney(result.amount)).toBe('-400.00');
-  });
+const adjustments = [
+  ['+50', '50.00'],
+  ['-12.5', '-12.50'],
+  ['+.5', '0.50'],
+  ['-0', '0.00'],
+  ['+0', '0.00'],
+  ['-0.005', '-0.01'],
+  ['-0.004', '0.00']
+];
 
-  test('supports decimal calculations', () => {
-    const result = calculate('50.5+0.25');
-    expect(formatMoney(result.amount)).toBe('50.75');
+for (const [input, amount] of adjustments) {
+  test(`adjustment ${input} -> ${amount}`, () => {
+    assert.deepEqual(parseCalculation(input), { expression: input, amount, type: 'adjustment' });
   });
+}
 
-  test('supports parentheses', () => {
-    expect(() => calculate('(50*4)+100')).toThrow('Invalid calculation');
-  });
+const rejected = [
+  '5', '12.5', '5.', '5.+1', '1e5+1', '+ 50', '--5', '5--3', '5-', '(1+2)', '10x2', '5150X1', '10×2',
+  '10/0', '10/0+2', '1,000+1', '٣+٢', '10 + 20 = 30', 'please calculate 10+20', '-5+3', '', '   ',
+  '1+'.repeat(100) + '1'
+];
 
-  test('rejects invalid input', () => {
-    expect(() => calculate('5**hello')).toThrow('Invalid calculation');
+for (const input of rejected) {
+  test(`rejects ${JSON.stringify(input.length > 30 ? `${input.slice(0, 12)}… (${input.length} chars)` : input)}`, () => {
+    assert.equal(parseCalculation(input), null);
   });
+}
 
-  test('detects normal chat as non-calculation', () => {
-    expect(hasAnyDigit('hey how are you')).toBe(false);
-    expect(looksLikeCalculation('hey how are you')).toBe(false);
-  });
-
-  test('rejects mixed text even when it contains numbers', () => {
-    expect(hasAnyDigit('Bas 628 done kr do')).toBe(true);
-    expect(looksLikeCalculation('Bas 628 done kr do')).toBe(false);
-  });
-
-  test('detects malformed numeric messages as non-calculation', () => {
-    expect(hasAnyDigit('5**hello')).toBe(true);
-    expect(looksLikeCalculation('5**hello')).toBe(false);
-  });
-
-  test('accepts only direct numeric calculation formats', () => {
-    expect(looksLikeCalculation('89-54')).toBe(true);
-    expect(looksLikeCalculation('-7')).toBe(true);
-    expect(looksLikeCalculation('78')).toBe(true);
-    expect(looksLikeCalculation('5*5')).toBe(true);
-    expect(looksLikeCalculation('100 / 4')).toBe(true);
-  });
+test('rejects non-string bodies', () => {
+  for (const input of [undefined, null, 42, {}, []]) assert.equal(parseCalculation(input), null);
 });

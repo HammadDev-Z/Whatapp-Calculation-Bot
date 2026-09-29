@@ -1,298 +1,177 @@
-const config = require('../config');
-const { isAnyAuthorized, isAuthorized, normalizeNumber } = require('../services/authorizationService');
-const { calculate, looksLikeCalculation } = require('../services/calculatorService');
-const { setDisplayName } = require('../services/groupService');
-const {
-  getGroupSummary,
-  getHistory,
-  isDuplicateMessage,
-  recordTransaction,
-  resetGroup,
-  undoLatest
-} = require('../services/transactionService');
-const {
-  formatCompactMoney,
-  formatExpression,
-  formatMoney,
-  formatPlainNumber,
-  formatCalculationExpression
-} = require('../utils/formatter');
-const logger = require('../utils/logger');
+const Decimal = require('decimal.js');
+const { parseCalculation } = require('../services/calculatorService');
+const { formatAmount } = require('../utils/formatter');
+const { randomDelayMs, sleep: defaultSleep } = require('../utils/delay');
+const defaultLogger = require('../utils/logger');
 
-const resetRequests = new Map();
+const REPLY_HEADER = 'MUSHFIK STORE';
+const REPLY_SUBHEADER = '🤖 Start To Work';
+const ALL_CLEAR_LINE = '✅ Thanks! All clear.';
+const NO_BALANCES_TEXT = '📊 No group calculations have been recorded yet.';
 
-function getMessageId(message) {
-  if (typeof message.id === 'string') return message.id;
-  return message.id?._serialized || message.id?.id || `${message.from}:${message.timestamp}:${message.body}`;
+const REPLY_DELAY_MIN_SECONDS = 3;
+const REPLY_DELAY_MAX_SECONDS = 6;
+
+const CALCULATE_COMMAND_PATTERN = /^\/calculate\s*$/i;
+
+function wid(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value._serialized === 'string') return value._serialized;
+  if (value.user && value.server) return `${value.user}@${value.server}`;
+  return '';
 }
 
-function getRawSenderId(message) {
-  return String(message.author || message.from || '');
-}
-
-function getSenderNumberFromRaw(message) {
-  const raw = getRawSenderId(message);
-  return normalizeNumber(String(raw).split('@')[0]);
-}
-
-async function getSenderIdentity(message) {
-  const rawSenderId = getRawSenderId(message);
-  const rawNumber = getSenderNumberFromRaw(message);
-  const values = [rawSenderId, rawNumber];
-
-  try {
-    const contact = await message.getContact();
-    values.push(contact.number, contact.id?._serialized, contact.id?.user);
-  } catch {
-    logger.warn('Unable to resolve sender contact, using raw sender id', {
-      senderId: rawSenderId
-    });
+function serializeMessageId(id) {
+  if (!id) return '';
+  if (typeof id === 'string') return id;
+  if (typeof id._serialized === 'string' && id._serialized) return id._serialized;
+  if (typeof id.id === 'string' && id.id) {
+    return [id.fromMe ? '1' : '0', wid(id.remote), id.id, wid(id.participant)].join('_');
   }
-
-  const normalizedValues = [...new Set(values.map(normalizeNumber).filter(Boolean))];
-  return {
-    rawSenderId,
-    number: normalizedValues[0] || rawNumber,
-    values: normalizedValues
-  };
+  return '';
 }
 
-async function getSenderNumber(message) {
-  return (await getSenderIdentity(message)).number;
-}
-
-function getChatId(chat) {
-  if (typeof chat.id === 'string') return chat.id;
-  return chat.id?._serialized || chat.id?.user || '';
-}
-
-async function getGroupContext(message) {
-  if (!String(message.from || '').endsWith('@g.us')) return null;
-
-  const fallback = {
-    id: message.from,
-    name: message.from,
-    isGroup: true
-  };
-
+// Best-effort; never throws. getChat() is known to throw on some WhatsApp Web builds.
+async function resolveGroupName(message) {
+  if (typeof message.getChat !== 'function') return null;
   try {
     const chat = await message.getChat();
-    return {
-      id: getChatId(chat) || message.from,
-      name: chat.name || message.from,
-      isGroup: Boolean(chat.isGroup)
-    };
-  } catch (error) {
-    logger.warn('Falling back to message.from for group context', {
-      error: error.message || String(error),
-      groupId: message.from
-    });
-    return fallback;
+    const candidate = chat.name || chat.formattedTitle || chat.subject || chat.groupMetadata?.subject;
+    if (typeof candidate !== 'string') return null;
+    return candidate.trim() || null;
+  } catch {
+    return null;
   }
 }
 
-function getGroupDisplayName(group) {
-  return group.display_name || group.whatsapp_group_name || 'GROUP';
+// Only consulted when the body is not a calculation.
+function parseCommand(body) {
+  if (typeof body !== 'string') return null;
+  if (CALCULATE_COMMAND_PATTERN.test(body.trim())) return { name: 'calculate' };
+  return null;
 }
 
-function getHeader(group) {
-  return `🎉${getGroupDisplayName(group)}🎉`;
-}
+// "Cur Total" is this message's amount; "All Total" is the group's new running balance.
+function buildCalculationReply(calculation, currentTotal) {
+  const expressionLine = calculation.type === 'adjustment'
+    ? formatAmount(calculation.amount)
+    : `① ${calculation.expression}=${formatAmount(calculation.amount)}`;
 
-function invalidCalculationText() {
-  return [
-    'Invalid calculation.',
+  const lines = [
+    REPLY_HEADER,
     '',
-    'Examples:',
-    '5*50.32',
-    '+500',
-    '-400',
-    '100/4'
-  ].join('\n');
-}
-
-function clampHistoryLimit(text) {
-  const [, limitText] = text.split(/\s+/);
-  const requested = Number.parseInt(limitText, 10);
-  if (!Number.isInteger(requested) || requested <= 0) return config.historyDefaultLimit;
-  return Math.min(requested, config.historyMaxLimit);
-}
-
-function resetKey(groupId, senderNumber) {
-  return `${groupId}:${senderNumber}`;
-}
-
-async function handleTotal(pool, chat) {
-  const summary = await getGroupSummary(pool, getChatId(chat));
-  const displayName = getGroupDisplayName(summary || { whatsapp_group_name: chat.name });
-  const total = summary ? summary.current_total : 0;
-  const count = summary ? summary.transaction_count : 0;
-  return [
-    getHeader({ display_name: displayName }),
-    `Cur Total: ${formatCompactMoney(total)}`,
-    `Transactions: ${count}`
-  ].join('\n');
-}
-
-async function handleHistory(pool, chat, text) {
-  const limit = clampHistoryLimit(text);
-  const summary = await getGroupSummary(pool, getChatId(chat));
-  const history = await getHistory(pool, getChatId(chat), limit);
-  const displayName = getGroupDisplayName(summary || { whatsapp_group_name: chat.name });
-  const lines = [`${getHeader({ display_name: displayName })} - HISTORY`];
-
-  if (history.length === 0) {
-    lines.push('No transactions yet.');
-  } else {
-    history.forEach((transaction, index) => {
-      const sign = Number(transaction.amount) >= 0 ? '+' : '';
-      lines.push(`${index + 1}. ${formatExpression(transaction.expression)} = ${sign}${formatCompactMoney(transaction.amount)}`);
-    });
-  }
-
-  lines.push(`TOTAL:${formatCompactMoney(summary ? summary.current_total : 0)}`);
+    REPLY_SUBHEADER,
+    expressionLine,
+    `Cur Total: ${formatAmount(calculation.amount)}`,
+    '',
+    `All Total:${formatAmount(currentTotal)}`
+  ];
+  if (new Decimal(currentTotal).isZero()) lines.push('', ALL_CLEAR_LINE);
   return lines.join('\n');
 }
 
-async function handleSetName(pool, chat, text) {
-  const displayName = text.replace(/^setname\s+/i, '').trim();
-  if (!displayName || displayName.length > 80) {
-    return 'Please send a valid name, for example: setname AWAN STORE';
-  }
-  const group = await setDisplayName(pool, getChatId(chat), chat.name, displayName);
-  return `${getHeader(group)}\nStore name updated.`;
-}
+function buildCalculateReport(balances) {
+  if (balances.length === 0) return NO_BALANCES_TEXT;
 
-async function handleReset(pool, chat, message, senderNumber, text) {
-  const key = resetKey(getChatId(chat), senderNumber);
-  if (text === 'reset') {
-    resetRequests.set(key, Date.now());
-    return "Are you sure you want to reset this group's balance?\n\nSend:\nreset confirm";
-  }
-
-  const requestedAt = resetRequests.get(key);
-  if (!requestedAt || Date.now() - requestedAt > 5 * 60 * 1000) {
-    return 'Reset confirmation expired. Send reset first.';
-  }
-
-  resetRequests.delete(key);
-  const result = await resetGroup(pool, {
-    whatsappGroupId: getChatId(chat),
-    whatsappGroupName: chat.name,
-    senderNumber,
-    messageId: getMessageId(message)
-  });
-  if (result.duplicate) return null;
-  const displayName = getGroupDisplayName(result.group);
-  return [getHeader({ display_name: displayName }), 'Balance reset to 0.0', `All Total:${formatCompactMoney(result.group.current_total)}`].join('\n');
-}
-
-async function handleUndo(pool, chat, message, senderNumber) {
-  const result = await undoLatest(pool, {
-    whatsappGroupId: getChatId(chat),
-    whatsappGroupName: chat.name,
-    senderNumber,
-    messageId: getMessageId(message)
-  });
-  if (result.duplicate) return null;
-  if (result.noTransaction) return 'Nothing to undo.';
+  const grandTotal = balances.reduce((sum, row) => sum.plus(row.current_total), new Decimal(0));
   return [
-    getHeader(result.group),
-    `Undo: ${formatExpression(result.target.expression)}`,
-    `Cur Total: ${formatCompactMoney(result.transaction.amount)}`,
-    `All Total:${formatCompactMoney(result.group.current_total)}`
+    '📊 GROUP CALCULATION STATUS',
+    '',
+    ...balances.map((row) => `${row.group_name || row.group_id}: ${formatAmount(row.current_total)}`),
+    '',
+    `Grand Total: ${formatAmount(grandTotal)}`
   ].join('\n');
 }
 
-async function handleCalculation(pool, chat, message, senderNumber, text) {
-  const calculation = calculate(text);
+function createMessageHandler({
+  calculationRepository,
+  calculateAccessRepository,
+  reportGroupId = '',
+  logger = defaultLogger,
+  sleep = defaultSleep,
+  random = Math.random
+}) {
+  const inFlight = new Set();
+  const warnedGroups = new Set();
 
-  const result = await recordTransaction(pool, {
-    whatsappGroupId: getChatId(chat),
-    whatsappGroupName: chat.name,
-    senderNumber,
-    messageId: getMessageId(message),
-    expression: calculation.expression,
-    transactionType: calculation.transactionType,
-    amount: calculation.amount
-  });
+  async function replyAfterDelay(message, text) {
+    await sleep(randomDelayMs(REPLY_DELAY_MIN_SECONDS, REPLY_DELAY_MAX_SECONDS, random));
+    await message.reply(text);
+  }
 
-  if (result.duplicate) return null;
-
-  const resultText = formatPlainNumber(calculation.amount);
-  const allTotal = formatPlainNumber(result.group.current_total);
-
-  return [
-    '💥 CALCULATION',
-    '',
-    `${formatCalculationExpression(calculation.expression)} = ${resultText}`,
-    '',
-    `💰 Total: ${resultText}`,
-    `📊 Due/Advance: ${allTotal}`
-  ].join('\n');
-}
-
-function createMessageHandler(pool) {
-  return async function onMessage(message) {
+  async function handleCalculation(message, groupId, messageId, calculation) {
+    if (!messageId || inFlight.has(messageId)) return;
+    inFlight.add(messageId);
     try {
-      if (message.fromMe) return;
-      const chat = await getGroupContext(message);
-      if (!chat?.isGroup) return;
+      // Stored raw (may be an @lid id) — attribution only, never used for access.
+      const sender = message.author || message.from;
 
-      const senderIdentity = await getSenderIdentity(message);
-      // Empty AUTHORIZED_NUMBERS => allow every sender in the group.
-      if (config.authorizedNumbers.length > 0 && !isAnyAuthorized(senderIdentity.values)) {
-        logger.info('Ignoring unauthorized WhatsApp sender', {
-          senderId: senderIdentity.rawSenderId,
-          detectedIds: senderIdentity.values,
-          groupId: getChatId(chat)
-        });
+      const groupName = await resolveGroupName(message);
+      if (!groupName && !warnedGroups.has(groupId)) {
+        warnedGroups.add(groupId);
+        logger.warn('Could not auto-detect group name; /calculate will show the group id', { groupId });
+      }
+
+      const result = await calculationRepository.record({
+        groupId,
+        messageId,
+        sender,
+        expression: calculation.expression,
+        amount: calculation.amount,
+        type: calculation.type,
+        groupName
+      });
+      if (result.duplicate) return;
+
+      await replyAfterDelay(message, buildCalculationReply(calculation, result.currentTotal));
+    } finally {
+      inFlight.delete(messageId);
+    }
+  }
+
+  async function handleCalculate(message, groupId) {
+    const allowed = (reportGroupId && groupId === reportGroupId)
+      || await calculateAccessRepository.isAllowed(groupId);
+    if (!allowed) return;
+
+    const balances = await calculationRepository.listBalances();
+    await replyAfterDelay(message, buildCalculateReport(balances));
+  }
+
+  return async function onMessage(message) {
+    if (!message || message.fromMe) return;
+    const groupId = String(message.from || '');
+    if (!groupId.endsWith('@g.us')) return;
+
+    const messageId = serializeMessageId(message.id);
+    try {
+      // Calculations win: command parsing is skipped entirely for them.
+      const calculation = parseCalculation(message.body);
+      if (calculation) {
+        await handleCalculation(message, groupId, messageId, calculation);
         return;
       }
-      const senderNumber = senderIdentity.number;
 
-      const text = String(message.body || '').trim();
-      if (!text) return;
-
-      const lowerText = text.toLowerCase();
-      const messageId = getMessageId(message);
-      if (await isDuplicateMessage(pool, messageId)) return;
-
-      let response = null;
-      if (lowerText === 'total') response = await handleTotal(pool, chat);
-      else if (lowerText === 'history' || lowerText.startsWith('history ')) response = await handleHistory(pool, chat, lowerText);
-      else if (lowerText.startsWith('setname ')) response = await handleSetName(pool, chat, text);
-      else if (lowerText === 'reset' || lowerText === 'reset confirm') response = await handleReset(pool, chat, message, senderNumber, lowerText);
-      else if (lowerText === 'undo') response = await handleUndo(pool, chat, message, senderNumber);
-      else if (looksLikeCalculation(text)) response = await handleCalculation(pool, chat, message, senderNumber, text);
-      else return;
-
-      if (response) await message.reply(response);
+      const command = parseCommand(message.body);
+      if (!command) return;
+      logger.info('WhatsApp command received', { command: command.name, groupId, messageId });
+      if (command.name === 'calculate') await handleCalculate(message, groupId);
     } catch (error) {
-      logger.error('Failed to process WhatsApp message', {
+      // Deliberately silent in the group: failures are only logged.
+      logger.error('Message processing failed', {
+        groupId,
+        messageId,
         error: error.message || String(error),
-        stack: error.stack,
-        messageId: getMessageId(message),
-        from: message.from,
-        author: message.author
+        stack: error.stack
       });
-      try {
-        const senderIdentity = await getSenderIdentity(message);
-        if (config.authorizedNumbers.length === 0 || isAuthorized(senderIdentity.number) || isAnyAuthorized(senderIdentity.values)) {
-          await message.reply('Something went wrong while processing your request.');
-        }
-      } catch (replyError) {
-        logger.error('Failed to send error reply', { error: replyError.message });
-      }
     }
   };
 }
 
 module.exports = {
   createMessageHandler,
-  getGroupContext,
-  getMessageId,
-  getSenderIdentity,
-  getSenderNumber,
-  getSenderNumberFromRaw
+  parseCommand,
+  resolveGroupName,
+  serializeMessageId
 };

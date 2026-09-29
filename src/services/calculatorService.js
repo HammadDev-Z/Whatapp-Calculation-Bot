@@ -1,68 +1,94 @@
 const Decimal = require('decimal.js');
-const { all, create } = require('mathjs');
 
-const math = create(all, {
-  number: 'BigNumber',
-  precision: 64
-});
+// decimal.js defaults (20 significant digits, ROUND_HALF_UP), pinned on a private clone
+// so a global Decimal.set() elsewhere can never change calculation results.
+const D = Decimal.clone({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
 
-const VALID_EXPRESSION_PATTERN = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:\s*[+\-*/]\s*(?:\d+(?:\.\d+)?|\.\d+))*$/;
+const MAX_LENGTH = 200;
 
-function normalizeExpression(input) {
-  return String(input || '').trim().replace(/,/g, '');
+// `\d` is ASCII 0-9 only. No trailing dot, exponents or thousands separators.
+const NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
+// `x`, `X` and `×` are deliberately NOT operators — they belong to an inventory
+// shorthand (`830x5`). Only `*` multiplies; `/` and `÷` both divide.
+const OPERATOR = String.raw`[+*/\-÷]`;
+
+const ADJUSTMENT_PATTERN = new RegExp(`^([+-])(${NUMBER})$`);
+const EXPRESSION_PATTERN = new RegExp(`^${NUMBER}(?:\\s*${OPERATOR}\\s*${NUMBER})+$`);
+const TOKEN_PATTERN = new RegExp(`${NUMBER}|${OPERATOR}`, 'g');
+
+const PRECEDENCE = { '+': 1, '-': 1, '*': 2, '/': 2, '÷': 2 };
+
+// Final rounding only: 2dp, ties away from zero, and never a negative zero.
+function toFixedAmount(value) {
+  const rounded = value.toDecimalPlaces(2, D.ROUND_HALF_UP);
+  return (rounded.isZero() ? rounded.abs() : rounded).toFixed(2);
 }
 
-function isArithmeticExpression(expression) {
-  if (!expression || expression.length > 200) return false;
-  if (!VALID_EXPRESSION_PATTERN.test(expression)) return false;
-  return /\d/.test(expression);
+// Returns null on division by zero so the whole parse is rejected.
+function applyOperator(operator, left, right) {
+  switch (operator) {
+    case '+': return left.plus(right);
+    case '-': return left.minus(right);
+    case '*': return left.times(right);
+    default: return right.isZero() ? null : left.dividedBy(right);
+  }
 }
 
-function hasAnyDigit(input) {
-  return /\d/.test(String(input || ''));
-}
+// Shunting-yard over two stacks, left-associative (pop while top precedence >= incoming).
+// Intermediate results keep full 20-digit precision.
+function evaluate(text) {
+  const values = [];
+  const operators = [];
 
-function looksLikeCalculation(input) {
-  const expression = normalizeExpression(input);
-  return VALID_EXPRESSION_PATTERN.test(expression);
-}
-
-function calculate(input) {
-  const expression = normalizeExpression(input);
-
-  if (!isArithmeticExpression(expression)) {
-    throw new Error('Invalid calculation');
-  }
-
-  let result;
-  try {
-    result = math.evaluate(expression);
-  } catch {
-    throw new Error('Invalid calculation');
-  }
-
-  if (Array.isArray(result) || typeof result === 'function') {
-    throw new Error('Invalid calculation');
-  }
-
-  const decimal = new Decimal(result.toString());
-  if (!decimal.isFinite()) {
-    throw new Error('Invalid calculation');
-  }
-
-  return {
-    expression,
-    amount: decimal.toDecimalPlaces(2),
-    transactionType: /^[+-]\s*\d/.test(expression) && !/[*/()]/.test(expression.slice(1))
-      ? 'adjustment'
-      : 'calculation'
+  const applyTop = () => {
+    const operator = operators.pop();
+    const right = values.pop();
+    const left = values.pop();
+    const result = applyOperator(operator, left, right);
+    if (result === null) return false;
+    values.push(result);
+    return true;
   };
+
+  for (const token of text.match(TOKEN_PATTERN)) {
+    if (Object.hasOwn(PRECEDENCE, token)) {
+      while (operators.length && PRECEDENCE[operators.at(-1)] >= PRECEDENCE[token]) {
+        if (!applyTop()) return null;
+      }
+      operators.push(token);
+    } else {
+      values.push(new D(token));
+    }
+  }
+
+  while (operators.length) {
+    if (!applyTop()) return null;
+  }
+  return values[0];
+}
+
+// Returns { expression, amount, type } or null when the message is not a calculation.
+// `amount` is a 2dp string ("30.00"); `expression` is the trimmed text exactly as typed.
+function parseCalculation(body) {
+  if (typeof body !== 'string') return null;
+  const text = body.trim();
+  if (!text || text.length > MAX_LENGTH) return null;
+
+  const adjustment = ADJUSTMENT_PATTERN.exec(text);
+  if (adjustment) {
+    const magnitude = new D(adjustment[2]);
+    const amount = adjustment[1] === '-' ? magnitude.negated() : magnitude;
+    return { expression: text, amount: toFixedAmount(amount), type: 'adjustment' };
+  }
+
+  if (!EXPRESSION_PATTERN.test(text)) return null;
+
+  const result = evaluate(text);
+  if (!result || !result.isFinite()) return null;
+
+  return { expression: text, amount: toFixedAmount(result), type: 'expression' };
 }
 
 module.exports = {
-  calculate,
-  hasAnyDigit,
-  isArithmeticExpression,
-  looksLikeCalculation,
-  normalizeExpression
+  parseCalculation
 };

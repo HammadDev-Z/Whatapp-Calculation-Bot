@@ -1,6 +1,9 @@
 # WhatsApp Calculator Accounting Bot
 
-A production-ready Node.js bot for WhatsApp groups. Authorized users can send arithmetic calculations or balance adjustments, and each group keeps an independent PostgreSQL-backed balance and audit history.
+A Node.js bot for WhatsApp groups. In every group the bot is in, a message that is only an
+arithmetic expression (`10+20-5`) or a signed adjustment (`+50`, `-12.5`) is added to that group's
+running balance in PostgreSQL, and the bot replies with a receipt. A designated report group can ask
+for every group's balance with `/calculate`.
 
 ## Requirements
 
@@ -40,10 +43,11 @@ Edit `.env`:
 
 ```env
 DATABASE_URL=postgresql://username:password@localhost:5432/whatsapp_calculator
-AUTHORIZED_NUMBERS=923001234567,923331234567
+CALCULATION_REPORT_GROUP_ID=120363000000000000@g.us
 ```
 
-Authorized numbers must be digits only with country code, without `+`.
+`CALCULATION_REPORT_GROUP_ID` is optional. It must end in `@g.us`, otherwise the bot refuses to start.
+See [Finding a group id](#finding-a-group-id).
 
 ## Install Dependencies
 
@@ -61,19 +65,14 @@ Copy the Docker env file:
 cp .env.docker.example .env
 ```
 
-Edit `.env` and set your WhatsApp number:
-
-```env
-AUTHORIZED_NUMBERS=923165057787
-```
-
 Build and start PostgreSQL, migrations, and the bot:
 
 ```bash
 docker compose up --build
 ```
 
-Watch the terminal output for the WhatsApp QR code. Scan it from WhatsApp, then add that WhatsApp account to your group.
+Watch the terminal output for the WhatsApp QR code. Scan it from WhatsApp, then add that WhatsApp
+account to your groups.
 
 If the QR scrolls away, run:
 
@@ -103,8 +102,12 @@ npm run migrate
 
 This creates:
 
-- `groups`: one row per WhatsApp group, with independent totals.
-- `transactions`: immutable audit records for calculations, resets, and undos.
+- `calculation_balances`: one row per WhatsApp group with its running total and auto-detected name.
+- `calculation_transactions`: an append-only record of every calculation, with the balance before and after.
+- `calculate_access_groups`: extra groups (besides `CALCULATION_REPORT_GROUP_ID`) allowed to run `/calculate`.
+
+The migration is safe to re-run. Tables from the previous version of the bot (`groups`,
+`transactions`) are not used any more and are left untouched.
 
 ## Start Locally
 
@@ -112,7 +115,8 @@ This creates:
 npm start
 ```
 
-On first start, scan the QR code printed in the terminal. The session is stored in `.whatsapp-session/`, so PM2 restarts do not normally require scanning again.
+On first start, scan the QR code printed in the terminal. The session is stored in
+`.whatsapp-session/`, so PM2 restarts do not normally require scanning again.
 
 ## Start With PM2
 
@@ -140,50 +144,89 @@ Run the command printed by `pm2 startup`.
 
 ## Supported WhatsApp Messages
 
-Only authorized users in groups are processed. Unauthorized users and private chats are ignored.
+Only group messages are processed; private chats are always ignored. Replies arrive as quoted
+replies after a random 3–6 second delay.
 
 ### Calculations
 
+The whole message must be the calculation. Operators are `+`, `-`, `*`, `/` and `÷`; standard
+precedence applies and the result is rounded to 2 decimals (halves round away from zero).
+
 ```text
-5*50.32
-10*30
-500/2
-100+50
-900-200
+10+20-5
+2+3*4-10/5
+90.38÷5
+10 + 20
 ```
 
-Messages must contain only the calculation itself. The bot ignores mixed chat such as `Bas 628 done kr do`.
+Not calculations (ignored): a bare number (`5`), a leading sign on an expression (`-5+3`),
+parentheses, `x` / `×` (reserved for inventory shorthand like `830x5`), commas (`1,000+1`),
+`=`, division by zero, anything over 200 characters, and mixed chat such as `Bas 628 done kr do`.
+
+Dates and phone numbers are evaluated too: `12/05/2026` records `0.00`, `0300-1234567` records
+`-1234267.00`.
 
 ### Direct Adjustments
 
-```text
-+500
--400
-+1250.50
--75.25
-```
-
-### Commands
+A single sign directly followed by a number (no space):
 
 ```text
-total
-history
-history 20
-reset
-reset confirm
-undo
-setname AWAN STORE
++50
+-12.5
++.5
 ```
 
-`history` limits are controlled by `HISTORY_DEFAULT_LIMIT` and `HISTORY_MAX_LIMIT`.
+### Reply
+
+```text
+MUSHFIK STORE
+
+🤖 Start To Work
+① 10+20=30.0
+Cur Total: 30.0
+
+All Total:30.0
+```
+
+`Cur Total` is this message's amount; `All Total` is the group's new running balance. Adjustments
+show just the amount on the line after `🤖 Start To Work`. When the balance reaches exactly zero the
+reply ends with `✅ Thanks! All clear.`
+
+### `/calculate`
+
+Works only in the group set as `CALCULATION_REPORT_GROUP_ID` or in a group with an active row in
+`calculate_access_groups`; everywhere else it is silently ignored.
+
+```text
+📊 GROUP CALCULATION STATUS
+
+Jerry Store: -900.0
+Khan Group: 500.0
+
+Grand Total: -400.0
+```
+
+Groups are labelled with their auto-detected WhatsApp name, or their id if the name could not be
+read. To hide a group from the report, set `calculation_balances.active = FALSE` for it.
+
+To let another group run `/calculate`:
+
+```sql
+INSERT INTO calculate_access_groups (group_id, group_name) VALUES ('120363000000000000@g.us', 'Office');
+```
+
+### Finding a group id
+
+Send `/calculate` in the group. The bot logs `WhatsApp command received` with the `groupId`, even
+when the group is not allowed to use the command.
 
 ## Security
 
-- Does not use JavaScript `eval()`.
-- Uses `mathjs` only for arithmetic expressions.
-- Ignores unauthorized numbers silently.
+- Does not use JavaScript `eval()`; expressions are parsed by a small hand-written evaluator.
+- Ignores all private chats.
 - Stores message IDs to protect against duplicate processing after reconnects.
 - Uses PostgreSQL transactions and row locking for balance updates.
+- Errors are logged, never sent to the group.
 - Never commit `.env`.
 
 ## Backup Recommendations
@@ -199,14 +242,15 @@ Automate daily backups on your server and store copies off-machine.
 ## Troubleshooting
 
 - **QR appears every restart**: ensure `.whatsapp-session/` is not deleted and PM2 runs from this project directory.
-- **Bot ignores messages**: confirm the chat is a group and `AUTHORIZED_NUMBERS` contains the sender number with country code.
+- **Bot does not reply to a calculation**: the message must be only the calculation (see the rules above), and it must be sent in a group. Check the logs for `Message processing failed`.
+- **`/calculate` does not reply**: the group must be `CALCULATION_REPORT_GROUP_ID` or have an active `calculate_access_groups` row.
+- **Group shows as an id in `/calculate`**: the bot could not read the group name from WhatsApp; it will pick it up on a later calculation in that group.
 - **Database errors**: verify `DATABASE_URL`, PostgreSQL service status, and run `npm run migrate`.
 - **Duplicate messages ignored**: expected behavior if WhatsApp replays an already processed message.
-- **No reply to chat**: messages must be only direct numeric calculations like `89-54`, `-7`, `78`, or `5*5`.
 
 ## Development
 
-Run tests:
+Run tests (Node's built-in `node:test`, no database needed):
 
 ```bash
 npm test
