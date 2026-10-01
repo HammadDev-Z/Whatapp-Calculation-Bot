@@ -13,7 +13,9 @@ const NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
 const OPERATOR = String.raw`[+*/\-÷]`;
 
 const ADJUSTMENT_PATTERN = new RegExp(`^([+-])(${NUMBER})$`);
-const EXPRESSION_PATTERN = new RegExp(`^${NUMBER}(?:\\s*${OPERATOR}\\s*${NUMBER})+$`);
+// An expression may start with a single `-` glued to the first number (`-32*4`); that sign
+// negates only the first number. A leading `+` is not accepted.
+const EXPRESSION_PATTERN = new RegExp(`^-?${NUMBER}(?:\\s*${OPERATOR}\\s*${NUMBER})+$`);
 const TOKEN_PATTERN = new RegExp(`${NUMBER}|${OPERATOR}`, 'g');
 
 const PRECEDENCE = { '+': 1, '-': 1, '*': 2, '/': 2, '÷': 2 };
@@ -37,6 +39,7 @@ function applyOperator(operator, left, right) {
 // Shunting-yard over two stacks, left-associative (pop while top precedence >= incoming).
 // Intermediate results keep full 20-digit precision.
 function evaluate(text) {
+  const negateFirst = text.startsWith('-');
   const values = [];
   const operators = [];
 
@@ -50,14 +53,16 @@ function evaluate(text) {
     return true;
   };
 
-  for (const token of text.match(TOKEN_PATTERN)) {
+  // A leading '-' is consumed as a sign, not as a binary operator.
+  for (const token of text.slice(negateFirst ? 1 : 0).match(TOKEN_PATTERN)) {
     if (Object.hasOwn(PRECEDENCE, token)) {
       while (operators.length && PRECEDENCE[operators.at(-1)] >= PRECEDENCE[token]) {
         if (!applyTop()) return null;
       }
       operators.push(token);
     } else {
-      values.push(new D(token));
+      const value = new D(token);
+      values.push(negateFirst && values.length === 0 ? value.negated() : value);
     }
   }
 

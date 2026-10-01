@@ -157,9 +157,13 @@ precedence applies and the result is rounded to 2 decimals (halves round away fr
 2+3*4-10/5
 90.38÷5
 10 + 20
+-32*4
 ```
 
-Not calculations (ignored): a bare number (`5`), a leading sign on an expression (`-5+3`),
+A single `-` directly before the first number is allowed and negates only that number: `-32*4`
+records `-128.00` and `-5+3` records `-2.00`.
+
+Not calculations (ignored): a bare number (`5`), a leading `+` on an expression (`+5*2`),
 parentheses, `x` / `×` (reserved for inventory shorthand like `830x5`), commas (`1,000+1`),
 `=`, division by zero, anything over 200 characters, and mixed chat such as `Bas 628 done kr do`.
 

@@ -62,8 +62,9 @@ evaluated). Each group has one balance (`calculation_balances.current_total`) an
 - Trim; empty or `> 200` chars → `null`. `NUMBER = \d+(\.\d+)?|\.\d+` (ASCII digits only; no `5.`,
   `1e5`, commas).
 - Adjustment checked first: `^[+-]NUMBER$` (no space after the sign) → `type: 'adjustment'`.
-- Expression: `^NUMBER(\s*OP\s*NUMBER)+$` with OP `+ - * / ÷`. Must start with a number and contain
-  an operator, so bare `5` and `-5+3` are `null`. **`x`/`X`/`×` are intentionally not operators.**
+- Expression: `^-?NUMBER(\s*OP\s*NUMBER)+$` with OP `+ - * / ÷`. Must contain an operator, so bare `5`
+  is `null`. One optional leading `-` (no space) negates only the first number: `-32*4` → `-128.00`,
+  `-5+3` → `-2.00`. A leading `+` on an expression (`+5*2`) is still `null`. **`x`/`X`/`×` are intentionally not operators.**
 - Evaluated by a hand-written shunting-yard over a private `decimal.js` clone (precision 20,
   `ROUND_HALF_UP`); intermediates unrounded. Division by zero anywhere → `null`.
 - `amount` is a 2dp **string** (`"30.00"`), never `-0.00`; `expression` is the trimmed text with
