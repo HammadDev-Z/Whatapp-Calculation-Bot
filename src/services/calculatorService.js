@@ -8,12 +8,12 @@ const MAX_LENGTH = 200;
 
 // `\d` is ASCII 0-9 only. No trailing dot, exponents or thousands separators.
 const NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
-// Only `+` and `-`. Multiplication and division (`*`, `/`, `÷`, `x`, `×`) are deliberately
-// unsupported, so such messages are ignored.
-const OPERATOR = String.raw`[+\-]`;
+// `+`, `-` and `*` only. Division (`/`, `÷`) and `x` / `×` are deliberately unsupported,
+// so such messages are ignored.
+const OPERATOR = String.raw`[+*\-]`;
 
 const ADJUSTMENT_PATTERN = new RegExp(`^([+-])(${NUMBER})$`);
-// An expression may start with a single `-` glued to the first number (`-32+4`); that sign
+// An expression may start with a single `-` glued to the first number (`-32*4`); that sign
 // negates only the first number. A leading `+` is not accepted.
 const EXPRESSION_PATTERN = new RegExp(`^-?${NUMBER}(?:\\s*${OPERATOR}\\s*${NUMBER})+$`);
 const TOKEN_PATTERN = new RegExp(`${NUMBER}|${OPERATOR}`, 'g');
@@ -24,19 +24,29 @@ function toFixedAmount(value) {
   return (rounded.isZero() ? rounded.abs() : rounded).toFixed(2);
 }
 
-// Left-to-right sum. Intermediate results keep full 20-digit precision.
+// `*` binds tighter than `+` and `-`: products are folded into the current term, and each
+// term is added or subtracted. Intermediate results keep full 20-digit precision.
 function evaluate(text) {
   const negateFirst = text.startsWith('-');
   // A leading '-' is consumed as a sign, not as a binary operator.
   const tokens = text.slice(negateFirst ? 1 : 0).match(TOKEN_PATTERN);
 
   const first = new D(tokens[0]);
-  let total = negateFirst ? first.negated() : first;
+  let term = negateFirst ? first.negated() : first;
+  let total = new D(0);
+  let sign = 1;
   for (let i = 1; i < tokens.length; i += 2) {
+    const operator = tokens[i];
     const value = new D(tokens[i + 1]);
-    total = tokens[i] === '+' ? total.plus(value) : total.minus(value);
+    if (operator === '*') {
+      term = term.times(value);
+    } else {
+      total = total.plus(sign === 1 ? term : term.negated());
+      sign = operator === '+' ? 1 : -1;
+      term = value;
+    }
   }
-  return total;
+  return total.plus(sign === 1 ? term : term.negated());
 }
 
 // Returns { expression, amount, type } or null when the message is not a calculation.
