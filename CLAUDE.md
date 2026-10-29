@@ -47,7 +47,7 @@ evaluated). Each group has one balance (`calculation_balances.current_total`) an
 2. `parseCalculation(body)` runs **first**; if it returns non-null, command parsing is skipped.
 3. Calculation path: `serializeMessageId` (empty → ignore) → in-memory `inFlight` Set guard (removed
    in `finally`) → `sender = author || from` stored raw (may be `@lid`) → `resolveGroupName` (best
-   effort, never throws; warns once per group per process when null) → `calculationRepository.record`
+   effort, never throws; successful names cached per group per process, so renames need a restart; warns once per group per process when null) → `calculationRepository.record`
    (`duplicate` → silent) → `message.reply` immediately (no delay).
 4. Otherwise `parseCommand` — only `/calculate` (`^/calculate\s*$`i on the trimmed body). Allowed if
    `groupId === reportGroupId` or `calculateAccessRepository.isAllowed(groupId)`; else silent. Replies

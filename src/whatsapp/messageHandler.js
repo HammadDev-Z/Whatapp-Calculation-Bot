@@ -88,6 +88,8 @@ function createMessageHandler({
 }) {
   const inFlight = new Set();
   const warnedGroups = new Set();
+  // Successful lookups only, so a failed getChat() is retried on the next message.
+  const groupNames = new Map();
 
   async function handleCalculation(message, groupId, messageId, calculation) {
     if (!messageId || inFlight.has(messageId)) return;
@@ -96,7 +98,11 @@ function createMessageHandler({
       // Stored raw (may be an @lid id) — attribution only, never used for access.
       const sender = message.author || message.from;
 
-      const groupName = await resolveGroupName(message);
+      let groupName = groupNames.get(groupId) || null;
+      if (!groupName) {
+        groupName = await resolveGroupName(message);
+        if (groupName) groupNames.set(groupId, groupName);
+      }
       if (!groupName && !warnedGroups.has(groupId)) {
         warnedGroups.add(groupId);
         logger.warn('Could not auto-detect group name; /calculate will show the group id', { groupId });

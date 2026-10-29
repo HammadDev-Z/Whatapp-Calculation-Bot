@@ -112,6 +112,34 @@ test('still records with a null group name when getChat() throws, and warns once
   assert.equal(calls.logs.filter(([level]) => level === 'warn').length, 1);
 });
 
+test('looks up the group name once per group and reuses it', async () => {
+  const { handler, calls } = createHandler();
+  let lookups = 0;
+  const getChat = async () => { lookups += 1; return { name: 'Karachi Buyers' }; };
+
+  await handler(createMessage({ getChat, id: { _serialized: 'a' } }).message);
+  await handler(createMessage({ getChat, id: { _serialized: 'b' } }).message);
+
+  assert.equal(lookups, 1);
+  assert.equal(calls.record[1].groupName, 'Karachi Buyers');
+});
+
+test('retries the group name lookup after a failure', async () => {
+  const { handler, calls } = createHandler();
+  let lookups = 0;
+  const getChat = async () => {
+    lookups += 1;
+    if (lookups === 1) throw new Error('r');
+    return { name: 'Karachi Buyers' };
+  };
+
+  await handler(createMessage({ getChat, id: { _serialized: 'a' } }).message);
+  await handler(createMessage({ getChat, id: { _serialized: 'b' } }).message);
+
+  assert.equal(calls.record[0].groupName, null);
+  assert.equal(calls.record[1].groupName, 'Karachi Buyers');
+});
+
 test('a duplicate message gets no reply', async () => {
   const { handler, calls } = createHandler({ record: () => ({ duplicate: true }) });
   const { message, replies } = createMessage();
