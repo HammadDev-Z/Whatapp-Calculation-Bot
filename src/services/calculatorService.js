@@ -8,17 +8,15 @@ const MAX_LENGTH = 200;
 
 // `\d` is ASCII 0-9 only. No trailing dot, exponents or thousands separators.
 const NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
-// `x`, `X` and `×` are deliberately NOT operators — they belong to an inventory
-// shorthand (`830x5`). Only `*` multiplies; `/` and `÷` both divide.
-const OPERATOR = String.raw`[+*/\-÷]`;
+// Only `+` and `-`. Multiplication and division (`*`, `/`, `÷`, `x`, `×`) are deliberately
+// unsupported, so such messages are ignored.
+const OPERATOR = String.raw`[+\-]`;
 
 const ADJUSTMENT_PATTERN = new RegExp(`^([+-])(${NUMBER})$`);
-// An expression may start with a single `-` glued to the first number (`-32*4`); that sign
+// An expression may start with a single `-` glued to the first number (`-32+4`); that sign
 // negates only the first number. A leading `+` is not accepted.
 const EXPRESSION_PATTERN = new RegExp(`^-?${NUMBER}(?:\\s*${OPERATOR}\\s*${NUMBER})+$`);
 const TOKEN_PATTERN = new RegExp(`${NUMBER}|${OPERATOR}`, 'g');
-
-const PRECEDENCE = { '+': 1, '-': 1, '*': 2, '/': 2, '÷': 2 };
 
 // Final rounding only: 2dp, ties away from zero, and never a negative zero.
 function toFixedAmount(value) {
@@ -26,50 +24,19 @@ function toFixedAmount(value) {
   return (rounded.isZero() ? rounded.abs() : rounded).toFixed(2);
 }
 
-// Returns null on division by zero so the whole parse is rejected.
-function applyOperator(operator, left, right) {
-  switch (operator) {
-    case '+': return left.plus(right);
-    case '-': return left.minus(right);
-    case '*': return left.times(right);
-    default: return right.isZero() ? null : left.dividedBy(right);
-  }
-}
-
-// Shunting-yard over two stacks, left-associative (pop while top precedence >= incoming).
-// Intermediate results keep full 20-digit precision.
+// Left-to-right sum. Intermediate results keep full 20-digit precision.
 function evaluate(text) {
   const negateFirst = text.startsWith('-');
-  const values = [];
-  const operators = [];
-
-  const applyTop = () => {
-    const operator = operators.pop();
-    const right = values.pop();
-    const left = values.pop();
-    const result = applyOperator(operator, left, right);
-    if (result === null) return false;
-    values.push(result);
-    return true;
-  };
-
   // A leading '-' is consumed as a sign, not as a binary operator.
-  for (const token of text.slice(negateFirst ? 1 : 0).match(TOKEN_PATTERN)) {
-    if (Object.hasOwn(PRECEDENCE, token)) {
-      while (operators.length && PRECEDENCE[operators.at(-1)] >= PRECEDENCE[token]) {
-        if (!applyTop()) return null;
-      }
-      operators.push(token);
-    } else {
-      const value = new D(token);
-      values.push(negateFirst && values.length === 0 ? value.negated() : value);
-    }
-  }
+  const tokens = text.slice(negateFirst ? 1 : 0).match(TOKEN_PATTERN);
 
-  while (operators.length) {
-    if (!applyTop()) return null;
+  const first = new D(tokens[0]);
+  let total = negateFirst ? first.negated() : first;
+  for (let i = 1; i < tokens.length; i += 2) {
+    const value = new D(tokens[i + 1]);
+    total = tokens[i] === '+' ? total.plus(value) : total.minus(value);
   }
-  return values[0];
+  return total;
 }
 
 // Returns { expression, amount, type } or null when the message is not a calculation.
@@ -89,7 +56,7 @@ function parseCalculation(body) {
   if (!EXPRESSION_PATTERN.test(text)) return null;
 
   const result = evaluate(text);
-  if (!result || !result.isFinite()) return null;
+  if (!result.isFinite()) return null;
 
   return { expression: text, amount: toFixedAmount(result), type: 'expression' };
 }
