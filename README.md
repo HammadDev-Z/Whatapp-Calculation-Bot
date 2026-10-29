@@ -159,10 +159,10 @@ rounded to 2 decimals (halves round away from zero).
 -32*4
 ```
 
-A single `-` directly before the first number is allowed and negates only that number: `-32*4`
-records `-128.00` and `-5+3` records `-2.00`.
+A single `+` or `-` directly before the first number is allowed; a `-` negates only that number:
+`-32*4` records `-128.00`, `-5+3` records `-2.00` and `+5*2` records `10.00`.
 
-Not calculations (ignored): a bare number (`5`), a leading `+` on an expression (`+5+2`),
+Not calculations (ignored): a bare number (`5`),
 division (`/`, `÷`, so `10/2` gets no reply), parentheses, `x` / `×`
 (reserved for inventory shorthand like `830x5`), commas (`1,000+1`),
 `=`, anything over 200 characters, and mixed chat such as `Bas 628 done kr do`.

@@ -13,9 +13,9 @@ const NUMBER = String.raw`(?:\d+(?:\.\d+)?|\.\d+)`;
 const OPERATOR = String.raw`[+*\-]`;
 
 const ADJUSTMENT_PATTERN = new RegExp(`^([+-])(${NUMBER})$`);
-// An expression may start with a single `-` glued to the first number (`-32*4`); that sign
-// negates only the first number. A leading `+` is not accepted.
-const EXPRESSION_PATTERN = new RegExp(`^-?${NUMBER}(?:\\s*${OPERATOR}\\s*${NUMBER})+$`);
+// An expression may start with a single `+` or `-` glued to the first number (`-32*4`,
+// `+5*2`); a `-` negates only the first number.
+const EXPRESSION_PATTERN = new RegExp(`^[+-]?${NUMBER}(?:\\s*${OPERATOR}\\s*${NUMBER})+$`);
 const TOKEN_PATTERN = new RegExp(`${NUMBER}|${OPERATOR}`, 'g');
 
 // Final rounding only: 2dp, ties away from zero, and never a negative zero.
@@ -28,8 +28,8 @@ function toFixedAmount(value) {
 // term is added or subtracted. Intermediate results keep full 20-digit precision.
 function evaluate(text) {
   const negateFirst = text.startsWith('-');
-  // A leading '-' is consumed as a sign, not as a binary operator.
-  const tokens = text.slice(negateFirst ? 1 : 0).match(TOKEN_PATTERN);
+  // A leading sign is consumed as a sign, not as a binary operator.
+  const tokens = text.slice(/^[+-]/.test(text) ? 1 : 0).match(TOKEN_PATTERN);
 
   const first = new D(tokens[0]);
   let term = negateFirst ? first.negated() : first;
