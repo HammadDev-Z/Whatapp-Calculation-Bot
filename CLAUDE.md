@@ -13,7 +13,7 @@ node --test --test-name-pattern="grand total"              # single test by name
 ```
 
 - Tests need **no database or WhatsApp connection**. `tests/messageHandler.test.js` injects fake
-  repositories plus stubbed `sleep`/`random`; `tests/calculationRepository.test.js` uses a fake pool
+  repositories and a stub logger; `tests/calculationRepository.test.js` uses a fake pool
   that records SQL and answers by `sql.startsWith(...)`. If you change a query's leading keywords in a
   repository, update the matching fake.
 - `npm test` is plain `node --test` (no path) so it works on Node 18–24; default discovery skips
@@ -48,14 +48,14 @@ evaluated). Each group has one balance (`calculation_balances.current_total`) an
 3. Calculation path: `serializeMessageId` (empty → ignore) → in-memory `inFlight` Set guard (removed
    in `finally`) → `sender = author || from` stored raw (may be `@lid`) → `resolveGroupName` (best
    effort, never throws; warns once per group per process when null) → `calculationRepository.record`
-   (`duplicate` → silent) → **random 3–6 s sleep after the DB write** → `message.reply`.
+   (`duplicate` → silent) → `message.reply` immediately (no delay).
 4. Otherwise `parseCommand` — only `/calculate` (`^/calculate\s*$`i on the trimmed body). Allowed if
-   `groupId === reportGroupId` or `calculateAccessRepository.isAllowed(groupId)`; else silent. Same
-   random delay before replying.
+   `groupId === reportGroupId` or `calculateAccessRepository.isAllowed(groupId)`; else silent. Replies
+   immediately.
 5. Every error is caught and logged as `Message processing failed`; **nothing is ever sent to the
    group on error** (DB overflow on huge numbers = silence).
 
-`sleep`, `random` and `logger` are injectable — tests stub them; keep new delays going through them.
+`logger` is injectable — tests stub it.
 
 ### Parser (`src/services/calculatorService.js`)
 

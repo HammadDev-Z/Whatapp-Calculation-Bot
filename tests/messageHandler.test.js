@@ -25,7 +25,7 @@ function createMessage(overrides = {}) {
 }
 
 function createHandler({ record, balances = [], allowed = false } = {}) {
-  const calls = { record: [], sleep: [], logs: [] };
+  const calls = { record: [], logs: [] };
   const handler = createMessageHandler({
     calculationRepository: {
       async record(args) {
@@ -46,9 +46,7 @@ function createHandler({ record, balances = [], allowed = false } = {}) {
       info: (...args) => calls.logs.push(['info', ...args]),
       warn: (...args) => calls.logs.push(['warn', ...args]),
       error: (...args) => calls.logs.push(['error', ...args])
-    },
-    sleep: async (ms) => { calls.sleep.push(ms); },
-    random: () => 0
+    }
   });
   return { handler, calls };
 }
@@ -71,7 +69,6 @@ test('records an expression with the auto-detected group name and replies with t
   assert.deepEqual(replies, [
     'MUSHFIK STORE\n\n🤖 Start To Work\n① 10+20=30.0\nCur Total: 30.0\n\nAll Total:30.0'
   ]);
-  assert.deepEqual(calls.sleep, [3000]);
 });
 
 test('an adjustment that clears the balance shows only the amount and the all-clear line', async () => {
@@ -115,14 +112,13 @@ test('still records with a null group name when getChat() throws, and warns once
   assert.equal(calls.logs.filter(([level]) => level === 'warn').length, 1);
 });
 
-test('a duplicate message gets no reply and no delay', async () => {
+test('a duplicate message gets no reply', async () => {
   const { handler, calls } = createHandler({ record: () => ({ duplicate: true }) });
   const { message, replies } = createMessage();
 
   await handler(message);
 
   assert.deepEqual(replies, []);
-  assert.deepEqual(calls.sleep, []);
 });
 
 test('ignores the same message id while it is still being processed', async () => {
@@ -193,7 +189,6 @@ test('/calculate from the report group lists balances and a grand total', async 
   assert.deepEqual(replies, [
     '📊 GROUP CALCULATION STATUS\n\nkhan group: 500.0\njerry group: -900.0\n\nGrand Total: -400.0'
   ]);
-  assert.deepEqual(calls.sleep, [3000]);
 });
 
 test('/calculate labels unnamed groups by id', async () => {
@@ -224,7 +219,6 @@ test('/calculate is silent in a group without access', async () => {
   await handler(message);
 
   assert.deepEqual(replies, []);
-  assert.deepEqual(calls.sleep, []);
 });
 
 test('/calculate works in a group on the access list', async () => {

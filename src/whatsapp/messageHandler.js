@@ -1,16 +1,12 @@
 const Decimal = require('decimal.js');
 const { parseCalculation } = require('../services/calculatorService');
 const { formatAmount } = require('../utils/formatter');
-const { randomDelayMs, sleep: defaultSleep } = require('../utils/delay');
 const defaultLogger = require('../utils/logger');
 
 const REPLY_HEADER = 'MUSHFIK STORE';
 const REPLY_SUBHEADER = '🤖 Start To Work';
 const ALL_CLEAR_LINE = '✅ Thanks! All clear.';
 const NO_BALANCES_TEXT = '📊 No group calculations have been recorded yet.';
-
-const REPLY_DELAY_MIN_SECONDS = 3;
-const REPLY_DELAY_MAX_SECONDS = 6;
 
 const CALCULATE_COMMAND_PATTERN = /^\/calculate\s*$/i;
 
@@ -88,17 +84,10 @@ function createMessageHandler({
   calculationRepository,
   calculateAccessRepository,
   reportGroupId = '',
-  logger = defaultLogger,
-  sleep = defaultSleep,
-  random = Math.random
+  logger = defaultLogger
 }) {
   const inFlight = new Set();
   const warnedGroups = new Set();
-
-  async function replyAfterDelay(message, text) {
-    await sleep(randomDelayMs(REPLY_DELAY_MIN_SECONDS, REPLY_DELAY_MAX_SECONDS, random));
-    await message.reply(text);
-  }
 
   async function handleCalculation(message, groupId, messageId, calculation) {
     if (!messageId || inFlight.has(messageId)) return;
@@ -124,7 +113,7 @@ function createMessageHandler({
       });
       if (result.duplicate) return;
 
-      await replyAfterDelay(message, buildCalculationReply(calculation, result.currentTotal));
+      await message.reply(buildCalculationReply(calculation, result.currentTotal));
     } finally {
       inFlight.delete(messageId);
     }
@@ -136,7 +125,7 @@ function createMessageHandler({
     if (!allowed) return;
 
     const balances = await calculationRepository.listBalances();
-    await replyAfterDelay(message, buildCalculateReport(balances));
+    await message.reply(buildCalculateReport(balances));
   }
 
   return async function onMessage(message) {

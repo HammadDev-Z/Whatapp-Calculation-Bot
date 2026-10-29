@@ -144,8 +144,8 @@ Run the command printed by `pm2 startup`.
 
 ## Supported WhatsApp Messages
 
-Only group messages are processed; private chats are always ignored. Replies arrive as quoted
-replies after a random 3–6 second delay.
+Only group messages are processed; private chats are always ignored. Replies arrive instantly as quoted
+replies.
 
 ### Calculations
 

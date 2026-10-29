@@ -1,7 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { formatAmount } = require('../src/utils/formatter');
-const { randomDelayMs } = require('../src/utils/delay');
 
 const amounts = [
   ['30.00', '30.0'],
@@ -19,10 +18,3 @@ for (const [input, output] of amounts) {
     assert.equal(formatAmount(input), output);
   });
 }
-
-test('randomDelayMs returns whole seconds within the inclusive range', () => {
-  assert.equal(randomDelayMs(3, 6, () => 0), 3000);
-  assert.equal(randomDelayMs(3, 6, () => 0.26), 4000);
-  assert.equal(randomDelayMs(3, 6, () => 0.5), 5000);
-  assert.equal(randomDelayMs(3, 6, () => 0.9999), 6000);
-});
