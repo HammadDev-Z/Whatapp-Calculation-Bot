@@ -38,24 +38,50 @@ WhatsApp group running-balance calculator, built to an exact external spec — *
 rounding are character-exact requirements; do not "improve" quirks** (e.g. dates/phone numbers being
 evaluated). Each group has one balance (`calculation_balances.current_total`) and an append-only
 `calculation_transactions` ledger. `src/app.js` builds the two repositories and passes them to
-`createMessageHandler({ calculationRepository, calculateAccessRepository, reportGroupId })`.
+`createMessageHandler({ calculationRepository, calculateAccessRepository, accessSettings, reportGroupId })`.
+A second process, the admin website (`src/web/`, `npm run web`), shares the same database.
 
 ### Message flow (`src/whatsapp/messageHandler.js`)
 
 1. Ignore missing messages, `fromMe`, and anything whose `message.from` doesn't end in `@g.us`.
-   There is **no per-group enable/verify and no sender check** — calculations run in every group.
+   There is **no per-group enable/verify** — but see the sender allowlist in steps 3 and 4.
 2. `parseCalculation(body)` runs **first**; if it returns non-null, command parsing is skipped.
+   Plain chat (neither a calculation nor `/calculate`) returns before any sender lookup.
 3. Calculation path: `serializeMessageId` (empty → ignore) → in-memory `inFlight` Set guard (removed
-   in `finally`) → `sender = author || from` stored raw (may be `@lid`) → `resolveGroupName` (best
+   in `finally`) → **sender allowlist**: `resolveSender` collects every id of the sender as digits
+   (raw `author` digits, `getContact()` number/id, `client.getContactLidAndPhone`; cached per author
+   only when the contact lookup succeeded) and `accessSettings.isSenderAllowed` needs one of them to
+   be an **active** row in `allowed_numbers`; otherwise the message is dropped silently after
+   `noteIgnoredSender` + `noteGroup` (so the website can offer to add them) →
+   `sender = author || from` stored raw (may be `@lid`) → `resolveGroupName` (best
    effort, never throws; successful names cached per group per process, so renames need a restart; warns once per group per process when null) → `calculationRepository.record`
-   (`duplicate` → silent) → `message.reply` immediately (no delay).
-4. Otherwise `parseCommand` — only `/calculate` (`^/calculate\s*$`i on the trimmed body). Allowed if
+   (`duplicate` → silent) → `accessSettings.getGroupLabel` → `message.reply` immediately (no delay).
+   The header is `MUSHFIK X <LABEL UPPER-CASED>` when the group has a label, else `MUSHFIK STORE`.
+4. Otherwise `parseCommand` — only `/calculate` (`^/calculate\s*$`i on the trimmed body). The same
+   sender allowlist applies first. Then allowed if
    `groupId === reportGroupId` or `calculateAccessRepository.isAllowed(groupId)`; else silent. Replies
    immediately.
 5. Every error is caught and logged as `Message processing failed`; **nothing is ever sent to the
    group on error** (DB overflow on huge numbers = silence).
 
-`logger` is injectable — tests stub it.
+`logger` is injectable — tests stub it. `accessSettings` is injected too (tests pass a fake).
+
+`AccessSettings` (`src/services/accessSettings.js`) caches the active numbers and group labels for
+5 s (shared in-flight load, last good copy kept if a refresh fails, first-load failure = message
+dropped). The website is a separate process, so edits there reach the bot within the TTL.
+
+### Website (`src/web/`)
+
+Express, server-rendered HTML with no client JS (`views.js`), started by `src/web/index.js`
+(`npm run web`, own Docker service behind a Caddy container that does HTTPS for `SITE_DOMAIN`).
+Pages: Groups (label per group id → receipt header), Numbers (add, Active/Disabled toggle,
+"Recently ignored" senders with one-click Add), Account (change password). Auth: scrypt hashes
+(`src/utils/password.js`), DB-backed sessions in `admin_sessions` (only a SHA-256 of the cookie token
+is stored; `HttpOnly`, `SameSite=Strict`, `Secure` behind HTTPS), per-session CSRF token in every form,
+separate double-submit token for the login form, in-memory login rate limit. The first admin is seeded
+from `ADMIN_USERNAME`/`ADMIN_PASSWORD` only when `admin_users` is empty. Tables: `admin_users`,
+`admin_sessions`, `allowed_numbers`, `bot_groups`, `ignored_senders`. `tests/web.test.js` drives the
+real app over HTTP with in-memory fake repositories.
 
 ### Parser (`src/services/calculatorService.js`)
 
@@ -88,6 +114,7 @@ null auto-detected name never overwrites a stored one. `pg` returns `NUMERIC` as
 
 `listBalances` returns only `active = TRUE` rows ordered by `COALESCE(group_name, group_id)`.
 `calculate_access_groups` and `calculation_balances.active` have no command or UI — they are managed in SQL.
+Numbers, group labels and ignored senders live in `accessRepository.js` and are managed on the website.
 
 `database/schema.sql` is re-applied in full on every migrate/`docker compose up`, so every statement must
 be idempotent (`IF NOT EXISTS`). The legacy `groups` / `transactions` tables from the previous bot

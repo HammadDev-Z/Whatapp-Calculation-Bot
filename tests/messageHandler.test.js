@@ -4,6 +4,7 @@ const {
   createMessageHandler,
   parseCommand,
   resolveGroupName,
+  resolveSender,
   serializeMessageId
 } = require('../src/whatsapp/messageHandler');
 
@@ -24,8 +25,31 @@ function createMessage(overrides = {}) {
   return { message, replies };
 }
 
-function createHandler({ record, balances = [], allowed = false } = {}) {
+// Stand-in for AccessSettings: `senderAllowed` may be a boolean or a function of the identifiers.
+function createAccessSettings({ senderAllowed = true, labels = {} } = {}) {
+  const calls = { checked: [], ignored: [], groups: [] };
+  return {
+    calls,
+    async isSenderAllowed(identifiers) {
+      calls.checked.push(identifiers);
+      return typeof senderAllowed === 'function' ? senderAllowed(identifiers) : senderAllowed;
+    },
+    async getGroupLabel(groupId) {
+      return labels[groupId] || null;
+    },
+    async noteIgnoredSender(details) {
+      calls.ignored.push(details);
+    },
+    async noteGroup(groupId, name) {
+      calls.groups.push([groupId, name]);
+    }
+  };
+}
+
+function createHandler({ record, balances = [], allowed = false, senderAllowed = true, labels } = {}) {
   const calls = { record: [], logs: [] };
+  const access = createAccessSettings({ senderAllowed, labels });
+  calls.access = access.calls;
   const handler = createMessageHandler({
     calculationRepository: {
       async record(args) {
@@ -41,6 +65,7 @@ function createHandler({ record, balances = [], allowed = false } = {}) {
         return allowed;
       }
     },
+    accessSettings: access,
     reportGroupId: REPORT_GROUP,
     logger: {
       info: (...args) => calls.logs.push(['info', ...args]),
@@ -290,4 +315,123 @@ test('resolveGroupName picks the first available name and never throws', async (
   assert.equal(await resolveGroupName({ getChat: async () => ({ groupMetadata: { subject: 'Subj' } }) }), 'Subj');
   assert.equal(await resolveGroupName({ getChat: async () => ({ name: '   ' }) }), null);
   assert.equal(await resolveGroupName({ getChat: async () => { throw new Error('r'); } }), null);
+});
+
+test('ignores a sender who is not allowed: no record, no reply, remembered for the website', async () => {
+  const { handler, calls } = createHandler({ senderAllowed: false });
+  const { message, replies } = createMessage();
+
+  await handler(message);
+
+  assert.deepEqual(replies, []);
+  assert.deepEqual(calls.record, []);
+  assert.deepEqual(calls.access.ignored, [{
+    senderId: '256577252638929@lid',
+    identifiers: ['256577252638929'],
+    pushName: null,
+    resolved: false,
+    groupId: 'g@g.us'
+  }]);
+  assert.deepEqual(calls.access.groups, [['g@g.us', 'Karachi Buyers']]);
+});
+
+test('/calculate is also ignored for a sender who is not allowed', async () => {
+  const { handler, calls } = createHandler({ senderAllowed: false, balances: [{ group_id: 'a@g.us', group_name: 'A', current_total: '5.00' }] });
+  const { message, replies } = createMessage({ from: REPORT_GROUP, body: '/calculate' });
+
+  await handler(message);
+
+  assert.deepEqual(replies, []);
+  assert.equal(calls.access.ignored.length, 1);
+});
+
+test('plain chat never triggers a sender lookup', async () => {
+  const { handler, calls } = createHandler();
+  const { message, replies } = createMessage({ body: 'Bas 628 done kr do' });
+
+  await handler(message);
+
+  assert.deepEqual(replies, []);
+  assert.deepEqual(calls.access.checked, []);
+});
+
+test('the sender is allowed when any resolved id matches, e.g. the phone behind an @lid author', async () => {
+  const { handler, calls } = createHandler({ senderAllowed: (ids) => ids.includes('923001234567') });
+  const getContact = async () => ({ number: '923001234567', id: { user: '923001234567', _serialized: '923001234567@c.us' } });
+  const { message, replies } = createMessage({ getContact });
+
+  await handler(message);
+
+  assert.equal(replies.length, 1);
+  assert.deepEqual(calls.access.checked[0].sort(), ['256577252638929', '923001234567']);
+});
+
+test('a resolved sender lookup is cached, a failed one is retried', async () => {
+  const { handler } = createHandler();
+  let lookups = 0;
+  const getContact = async () => { lookups += 1; return { number: '923001234567' }; };
+  await handler(createMessage({ getContact, id: { _serialized: 'a' } }).message);
+  await handler(createMessage({ getContact, id: { _serialized: 'b' } }).message);
+  assert.equal(lookups, 1);
+
+  const { handler: retrying } = createHandler();
+  let failures = 0;
+  const failing = async () => { failures += 1; throw new Error('r'); };
+  await retrying(createMessage({ getContact: failing, id: { _serialized: 'c' } }).message);
+  await retrying(createMessage({ getContact: failing, id: { _serialized: 'd' } }).message);
+  assert.equal(failures, 2);
+});
+
+test('the receipt header uses the saved group name, upper-cased', async () => {
+  const { handler } = createHandler({ labels: { 'g@g.us': 'Hammad' } });
+  const { message, replies } = createMessage();
+
+  await handler(message);
+
+  assert.deepEqual(replies, [
+    'MUSHFIK X HAMMAD\n\n🤖 Start To Work\n① 10+20=30.0\nCur Total: 30.0\n\nAll Total:30.0'
+  ]);
+});
+
+test('each group gets its own saved name', async () => {
+  const { handler } = createHandler({ labels: { 'g@g.us': 'Hammad', 'h@g.us': 'Ali Khan' } });
+  const first = createMessage();
+  const second = createMessage({ from: 'h@g.us', id: { _serialized: 'msg-2' } });
+
+  await handler(first.message);
+  await handler(second.message);
+
+  assert.match(first.replies[0], /^MUSHFIK X HAMMAD\n/);
+  assert.match(second.replies[0], /^MUSHFIK X ALI KHAN\n/);
+});
+
+test('a group without a saved name keeps the default header', async () => {
+  const { handler } = createHandler({ labels: { 'other@g.us': 'Hammad' } });
+  const { message, replies } = createMessage();
+
+  await handler(message);
+
+  assert.match(replies[0], /^MUSHFIK STORE\n/);
+});
+
+test('resolveSender collects ids from the author, the contact and the lid lookup', async () => {
+  const sender = await resolveSender({
+    author: '256577252638929@lid',
+    from: 'g@g.us',
+    _data: { notifyName: 'Ali' },
+    getContact: async () => ({ number: '923001234567', id: { user: '256577252638929', _serialized: '256577252638929@lid' } }),
+    client: { getContactLidAndPhone: async () => [{ lid: '256577252638929@lid', pn: '923009999999@c.us' }] }
+  });
+
+  assert.equal(sender.senderId, '256577252638929@lid');
+  assert.equal(sender.pushName, 'Ali');
+  assert.equal(sender.resolved, true);
+  assert.deepEqual(sender.identifiers.sort(), ['256577252638929', '923001234567', '923009999999']);
+});
+
+test('resolveSender never throws and falls back to the raw id', async () => {
+  const sender = await resolveSender({ author: '923001234567@c.us', getContact: async () => { throw new Error('r'); } });
+
+  assert.deepEqual(sender.identifiers, ['923001234567']);
+  assert.equal(sender.resolved, false);
 });

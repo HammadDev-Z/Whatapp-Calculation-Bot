@@ -3,7 +3,8 @@
 A Node.js bot for WhatsApp groups. In every group the bot is in, a message that is only an
 arithmetic expression (`10+20-5`) or a signed adjustment (`+50`, `-12.5`) is added to that group's
 running balance in PostgreSQL, and the bot replies with a receipt. A designated report group can ask
-for every group's balance with `/calculate`.
+for every group's balance with `/calculate`. An admin website (see [Website](#website)) controls
+which phone numbers the bot answers and what name each group's receipts carry.
 
 ## Requirements
 
@@ -192,6 +193,9 @@ Cur Total: 30.0
 All Total:30.0
 ```
 
+The header is `MUSHFIK STORE` by default. When a name is saved for the group on the website, it
+becomes `MUSHFIK X <NAME>` in capitals, e.g. `MUSHFIK X HAMMAD`.
+
 `Cur Total` is this message's amount; `All Total` is the group's new running balance. Adjustments
 show just the amount on the line after `🤖 Start To Work`. When the balance reaches exactly zero the
 reply ends with `✅ Thanks! All clear.`
@@ -221,13 +225,55 @@ INSERT INTO calculate_access_groups (group_id, group_name) VALUES ('120363000000
 
 ### Finding a group id
 
-Send `/calculate` in the group. The bot logs `WhatsApp command received` with the `groupId`, even
-when the group is not allowed to use the command.
+The website's Groups page lists every group the bot has seen, with its id. Groups appear after
+someone sends a calculation or `/calculate` in them. The bot also logs `WhatsApp command received`
+with the `groupId` for `/calculate`.
+
+## Website
+
+The website is how you manage the bot day to day. Sign in, then:
+
+- **Groups**: give each group a name. Receipts in that group start with `MUSHFIK X <NAME>`. Groups
+  with no name keep `MUSHFIK STORE`. You can also add a group by its id (`...@g.us`).
+- **Numbers**: add phone numbers (digits with the country code, e.g. `923001234567`) and switch
+  each one **Active** or **Disabled**. **The bot only answers active numbers**, for calculations and
+  for `/calculate`. Everyone else is ignored silently. A new install has no numbers, so add yours
+  first. People who were ignored are listed under *Recently ignored* with an Add button, which is
+  the easiest way to add someone.
+- **Account**: change the password. Changing it signs every other device out.
+
+Changes reach the bot within about 5 seconds. WhatsApp sometimes identifies a sender by an
+internal id (ending `@lid`) instead of a phone number. The bot looks up the real number when it
+can; when it cannot, *Recently ignored* shows the internal id, and adding that works the same way.
+
+### Setting up the website on your domain (Docker)
+
+1. In `.env` set `SITE_DOMAIN` (e.g. `codeguy.pp.ua`), `ADMIN_USERNAME` and `ADMIN_PASSWORD`
+   (8+ characters). They only create the first admin; afterwards change the password on the
+   Account page.
+2. Point the domain at the server: create an **A record** for the domain (and `www` if you want it)
+   with the server's public IP. If the domain is on "Parking NS" at the registrar, either switch it
+   to the registrar's real DNS or change its nameservers to a DNS host (for example Cloudflare), and
+   create the A record there. DNS can take from a few minutes to a few hours.
+3. Open ports **80 and 443** on the server's firewall or cloud security group.
+4. Run `docker compose up --build -d`. Caddy requests and renews the HTTPS certificate by itself
+   once the A record resolves. Check with `docker compose logs -f caddy`.
+5. Open `https://<your domain>` and sign in.
+
+Without Docker, run `npm run web` (or `pm2 start ecosystem.config.js`, which starts the bot and the
+website) and put a reverse proxy with HTTPS (nginx or Caddy) in front of port 3000. Set `PORT`,
+`ADMIN_USERNAME` and `ADMIN_PASSWORD` in `.env`.
+
+If you forget the password, remove the admin so a new one is created from `.env` on the next start:
+`docker compose exec postgres psql -U whatsapp_bot -d whatsapp_calculator -c "DELETE FROM admin_users;"`
+then `docker compose restart web`.
 
 ## Security
 
+- The website needs a login, uses HTTPS (through Caddy), hashes passwords with scrypt, rate-limits
+  failed sign-ins and protects forms against CSRF.
 - Does not use JavaScript `eval()`; expressions are parsed by a small hand-written evaluator.
-- Ignores all private chats.
+- Ignores all private chats, and any group message from a number that is not active on the website.
 - Stores message IDs to protect against duplicate processing after reconnects.
 - Uses PostgreSQL transactions and row locking for balance updates.
 - Errors are logged, never sent to the group.

@@ -1,5 +1,7 @@
 const config = require('./config');
 const pool = require('./database/pool');
+const AccessRepository = require('./services/accessRepository');
+const AccessSettings = require('./services/accessSettings');
 const CalculateAccessRepository = require('./services/calculateAccessRepository');
 const CalculationRepository = require('./services/calculationRepository');
 const createWhatsAppClient = require('./whatsapp/client');
@@ -11,6 +13,7 @@ async function main() {
   client.on('message', createMessageHandler({
     calculationRepository: new CalculationRepository(pool),
     calculateAccessRepository: new CalculateAccessRepository(pool),
+    accessSettings: new AccessSettings(new AccessRepository(pool), { logger }),
     reportGroupId: config.calculationReportGroupId
   }));
   await client.initialize();

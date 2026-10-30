@@ -1,9 +1,11 @@
 const Decimal = require('decimal.js');
 const { parseCalculation } = require('../services/calculatorService');
 const { formatAmount } = require('../utils/formatter');
+const { normalizeNumber } = require('../utils/phone');
 const defaultLogger = require('../utils/logger');
 
-const REPLY_HEADER = 'MUSHFIK STORE';
+const DEFAULT_REPLY_HEADER = 'MUSHFIK STORE';
+const HEADER_PREFIX = 'MUSHFIK X ';
 const REPLY_SUBHEADER = '🤖 Start To Work';
 const ALL_CLEAR_LINE = '✅ Thanks! All clear.';
 const NO_BALANCES_TEXT = '📊 No group calculations have been recorded yet.';
@@ -41,6 +43,36 @@ async function resolveGroupName(message) {
   }
 }
 
+const digitsOf = (value) => normalizeNumber(String(value || '').split('@')[0]);
+
+// Every id the sender is known by, as digits: the raw author id (a phone number, or an @lid id on
+// newer WhatsApp builds) plus whatever the contact lookup resolves. Best-effort; never throws.
+async function resolveSender(message) {
+  const senderId = String(message.author || message.from || '');
+  const identifiers = new Set([digitsOf(senderId)]);
+  const pushName = message._data?.notifyName || null;
+  let resolved = false;
+
+  try {
+    const contact = await message.getContact();
+    [contact.number, contact.id?.user, contact.id?._serialized].forEach((value) => identifiers.add(digitsOf(value)));
+    resolved = true;
+  } catch {
+    // fall through to the lid lookup / raw id
+  }
+  try {
+    if (message.client && typeof message.client.getContactLidAndPhone === 'function') {
+      const [match] = await message.client.getContactLidAndPhone([senderId]);
+      if (match) [match.pn, match.lid].forEach((value) => identifiers.add(digitsOf(value)));
+    }
+  } catch {
+    // older WhatsApp Web builds do not expose it
+  }
+
+  identifiers.delete('');
+  return { senderId, identifiers: [...identifiers], pushName, resolved };
+}
+
 // Only consulted when the body is not a calculation.
 function parseCommand(body) {
   if (typeof body !== 'string') return null;
@@ -49,13 +81,13 @@ function parseCommand(body) {
 }
 
 // "Cur Total" is this message's amount; "All Total" is the group's new running balance.
-function buildCalculationReply(calculation, currentTotal) {
+function buildCalculationReply(calculation, currentTotal, groupLabel = null) {
   const expressionLine = calculation.type === 'adjustment'
     ? formatAmount(calculation.amount)
     : `① ${calculation.expression}=${formatAmount(calculation.amount)}`;
 
   const lines = [
-    REPLY_HEADER,
+    groupLabel ? `${HEADER_PREFIX}${groupLabel.toUpperCase()}` : DEFAULT_REPLY_HEADER,
     '',
     REPLY_SUBHEADER,
     expressionLine,
@@ -83,6 +115,7 @@ function buildCalculateReport(balances) {
 function createMessageHandler({
   calculationRepository,
   calculateAccessRepository,
+  accessSettings,
   reportGroupId = '',
   logger = defaultLogger
 }) {
@@ -90,23 +123,55 @@ function createMessageHandler({
   const warnedGroups = new Set();
   // Successful lookups only, so a failed getChat() is retried on the next message.
   const groupNames = new Map();
+  // Successful sender lookups only, so a failed getContact() is retried on the next message.
+  const senders = new Map();
+
+  async function getGroupName(message, groupId) {
+    let groupName = groupNames.get(groupId) || null;
+    if (!groupName) {
+      groupName = await resolveGroupName(message);
+      if (groupName) groupNames.set(groupId, groupName);
+    }
+    if (!groupName && !warnedGroups.has(groupId)) {
+      warnedGroups.add(groupId);
+      logger.warn('Could not auto-detect group name; /calculate will show the group id', { groupId });
+    }
+    return groupName;
+  }
+
+  async function getSender(message) {
+    const cacheKey = String(message.author || message.from || '');
+    const cached = senders.get(cacheKey);
+    if (cached) return cached;
+    const sender = await resolveSender(message);
+    if (sender.resolved) senders.set(cacheKey, sender);
+    return sender;
+  }
+
+  // Only numbers that are added and active on the website get a response. Everyone else is
+  // ignored silently, but remembered so the website can offer to add them.
+  async function isSenderAllowed(message, groupId) {
+    const sender = await getSender(message);
+    if (await accessSettings.isSenderAllowed(sender.identifiers)) return true;
+
+    try {
+      await accessSettings.noteIgnoredSender({ ...sender, groupId });
+      await accessSettings.noteGroup(groupId, await getGroupName(message, groupId));
+    } catch (error) {
+      logger.warn('Could not record ignored sender', { groupId, error: error.message || String(error) });
+    }
+    return false;
+  }
 
   async function handleCalculation(message, groupId, messageId, calculation) {
     if (!messageId || inFlight.has(messageId)) return;
     inFlight.add(messageId);
     try {
-      // Stored raw (may be an @lid id) — attribution only, never used for access.
-      const sender = message.author || message.from;
+      if (!await isSenderAllowed(message, groupId)) return;
 
-      let groupName = groupNames.get(groupId) || null;
-      if (!groupName) {
-        groupName = await resolveGroupName(message);
-        if (groupName) groupNames.set(groupId, groupName);
-      }
-      if (!groupName && !warnedGroups.has(groupId)) {
-        warnedGroups.add(groupId);
-        logger.warn('Could not auto-detect group name; /calculate will show the group id', { groupId });
-      }
+      // Stored raw (may be an @lid id) — attribution only.
+      const sender = message.author || message.from;
+      const groupName = await getGroupName(message, groupId);
 
       const result = await calculationRepository.record({
         groupId,
@@ -119,13 +184,16 @@ function createMessageHandler({
       });
       if (result.duplicate) return;
 
-      await message.reply(buildCalculationReply(calculation, result.currentTotal));
+      const groupLabel = await accessSettings.getGroupLabel(groupId);
+      await message.reply(buildCalculationReply(calculation, result.currentTotal, groupLabel));
     } finally {
       inFlight.delete(messageId);
     }
   }
 
   async function handleCalculate(message, groupId) {
+    if (!await isSenderAllowed(message, groupId)) return;
+
     const allowed = (reportGroupId && groupId === reportGroupId)
       || await calculateAccessRepository.isAllowed(groupId);
     if (!allowed) return;
@@ -168,5 +236,6 @@ module.exports = {
   createMessageHandler,
   parseCommand,
   resolveGroupName,
+  resolveSender,
   serializeMessageId
 };

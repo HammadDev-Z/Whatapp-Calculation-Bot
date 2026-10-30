@@ -52,6 +52,46 @@ services:
       - whatsapp_session:/app/.whatsapp-session
     stop_grace_period: 30s
 
+  # Admin website (groups, numbers, password). Only reachable through Caddy below.
+  web:
+    build: .
+    container_name: whatsapp-calculator-web
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://whatsapp_bot:whatsapp_bot_password@postgres:5432/whatsapp_calculator
+      PORT: "3000"
+      # Only used to create the first admin; change the password on the website afterwards.
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    command: ["npm", "run", "web"]
+
+  # HTTPS for the website. Needs ports 80 and 443 open and SITE_DOMAIN pointing at this server.
+  caddy:
+    image: caddy:2-alpine
+    container_name: whatsapp-calculator-caddy
+    restart: unless-stopped
+    depends_on:
+      - web
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   postgres_data:
   whatsapp_session:
+  caddy_data:
+  caddy_config:

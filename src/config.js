@@ -10,6 +10,9 @@ module.exports = {
   nodeEnv: process.env.NODE_ENV || 'development',
   databaseUrl: process.env.DATABASE_URL,
   calculationReportGroupId,
+  webPort: Number(process.env.PORT) || 3000,
+  adminUsername: String(process.env.ADMIN_USERNAME || '').trim(),
+  adminPassword: String(process.env.ADMIN_PASSWORD || ''),
   whatsappSessionPath: process.env.WHATSAPP_SESSION_PATH || '.whatsapp-session',
   chromeExecutablePath: process.env.CHROME_EXECUTABLE_PATH || '',
   logLevel: process.env.LOG_LEVEL || 'info'
