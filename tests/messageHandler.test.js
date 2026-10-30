@@ -27,7 +27,7 @@ function createMessage(overrides = {}) {
 
 // Stand-in for AccessSettings: `senderAllowed` may be a boolean or a function of the identifiers.
 function createAccessSettings({ senderAllowed = true, labels = {} } = {}) {
-  const calls = { checked: [], ignored: [], groups: [] };
+  const calls = { checked: [] };
   return {
     calls,
     async isSenderAllowed(identifiers) {
@@ -36,12 +36,6 @@ function createAccessSettings({ senderAllowed = true, labels = {} } = {}) {
     },
     async getGroupLabel(groupId) {
       return labels[groupId] || null;
-    },
-    async noteIgnoredSender(details) {
-      calls.ignored.push(details);
-    },
-    async noteGroup(groupId, name) {
-      calls.groups.push([groupId, name]);
     }
   };
 }
@@ -283,9 +277,13 @@ test('/calculate works in a group on the access list', async () => {
   assert.equal(replies.length, 1);
 });
 
-test('parseCommand recognises only /calculate', () => {
+test('parseCommand recognises only /calculate and /groupid', () => {
   assert.deepEqual(parseCommand('/calculate'), { name: 'calculate' });
   assert.deepEqual(parseCommand('  /CALCULATE  '), { name: 'calculate' });
+  assert.deepEqual(parseCommand('/groupid'), { name: 'groupid' });
+  assert.deepEqual(parseCommand('  /GroupID '), { name: 'groupid' });
+  assert.equal(parseCommand('/groupid now'), null);
+  assert.equal(parseCommand('/group id'), null);
   assert.equal(parseCommand('/calculate now'), null);
   assert.equal(parseCommand('/setname Khan Group'), null);
   assert.equal(parseCommand(undefined), null);
@@ -317,7 +315,7 @@ test('resolveGroupName picks the first available name and never throws', async (
   assert.equal(await resolveGroupName({ getChat: async () => { throw new Error('r'); } }), null);
 });
 
-test('ignores a sender who is not allowed: no record, no reply, remembered for the website', async () => {
+test('ignores a sender who is not allowed: no record, no reply, and the ids are logged', async () => {
   const { handler, calls } = createHandler({ senderAllowed: false });
   const { message, replies } = createMessage();
 
@@ -325,14 +323,13 @@ test('ignores a sender who is not allowed: no record, no reply, remembered for t
 
   assert.deepEqual(replies, []);
   assert.deepEqual(calls.record, []);
-  assert.deepEqual(calls.access.ignored, [{
+  const ignored = calls.logs.filter(([, text]) => /Ignoring a sender/.test(text));
+  assert.equal(ignored.length, 1);
+  assert.deepEqual(ignored[0][2], {
+    groupId: 'g@g.us',
     senderId: '256577252638929@lid',
-    identifiers: ['256577252638929'],
-    pushName: null,
-    resolved: false,
-    groupId: 'g@g.us'
-  }]);
-  assert.deepEqual(calls.access.groups, [['g@g.us', 'Karachi Buyers']]);
+    identifiers: ['256577252638929']
+  });
 });
 
 test('/calculate is also ignored for a sender who is not allowed', async () => {
@@ -342,7 +339,44 @@ test('/calculate is also ignored for a sender who is not allowed', async () => {
   await handler(message);
 
   assert.deepEqual(replies, []);
-  assert.equal(calls.access.ignored.length, 1);
+  assert.equal(calls.logs.filter(([, text]) => /Ignoring a sender/.test(text)).length, 1);
+});
+
+test('/groupid replies with the id of the group it is sent in', async () => {
+  const { handler } = createHandler();
+  const { message, replies } = createMessage({ from: '120363012345678901@g.us', body: '/groupid' });
+
+  await handler(message);
+
+  assert.deepEqual(replies, ['120363012345678901@g.us']);
+});
+
+test('/groupid works in any group and records nothing', async () => {
+  const { handler, calls } = createHandler();
+  const { message, replies } = createMessage({ body: ' /GROUPID ' });
+
+  await handler(message);
+
+  assert.deepEqual(replies, ['g@g.us']);
+  assert.deepEqual(calls.record, []);
+});
+
+test('/groupid is ignored for a sender who is not allowed', async () => {
+  const { handler } = createHandler({ senderAllowed: false });
+  const { message, replies } = createMessage({ body: '/groupid' });
+
+  await handler(message);
+
+  assert.deepEqual(replies, []);
+});
+
+test('/groupid is ignored in private chats', async () => {
+  const { handler } = createHandler();
+  const { message, replies } = createMessage({ from: '923001234567@c.us', body: '/groupid' });
+
+  await handler(message);
+
+  assert.deepEqual(replies, []);
 });
 
 test('plain chat never triggers a sender lookup', async () => {
@@ -418,13 +452,11 @@ test('resolveSender collects ids from the author, the contact and the lid lookup
   const sender = await resolveSender({
     author: '256577252638929@lid',
     from: 'g@g.us',
-    _data: { notifyName: 'Ali' },
     getContact: async () => ({ number: '923001234567', id: { user: '256577252638929', _serialized: '256577252638929@lid' } }),
     client: { getContactLidAndPhone: async () => [{ lid: '256577252638929@lid', pn: '923009999999@c.us' }] }
   });
 
   assert.equal(sender.senderId, '256577252638929@lid');
-  assert.equal(sender.pushName, 'Ali');
   assert.equal(sender.resolved, true);
   assert.deepEqual(sender.identifiers.sort(), ['256577252638929', '923001234567', '923009999999']);
 });

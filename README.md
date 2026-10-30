@@ -223,28 +223,35 @@ To let another group run `/calculate`:
 INSERT INTO calculate_access_groups (group_id, group_name) VALUES ('120363000000000000@g.us', 'Office');
 ```
 
+### `/groupid`
+
+Send `/groupid` in a group and the bot replies with that group's id (`120363012345678901@g.us`).
+Copy it into the website's Groups page to give the group a name. Like everything else, it only
+answers numbers that are active on the website.
+
 ### Finding a group id
 
-The website's Groups page lists every group the bot has seen, with its id. Groups appear after
-someone sends a calculation or `/calculate` in them. The bot also logs `WhatsApp command received`
-with the `groupId` for `/calculate`.
+Use `/groupid` (above). The bot also logs `WhatsApp command received` with the `groupId`.
 
 ## Website
 
 The website is how you manage the bot day to day. Sign in, then:
 
-- **Groups**: give each group a name. Receipts in that group start with `MUSHFIK X <NAME>`. Groups
-  with no name keep `MUSHFIK STORE`. You can also add a group by its id (`...@g.us`).
+- **Groups**: nothing is listed until you add a group yourself. Send `/groupid` in the WhatsApp
+  group, paste the id the bot replies with, and give the group a name. Receipts in that group then
+  start with `MUSHFIK X <NAME>`. Groups you have not added keep `MUSHFIK STORE`. You can rename or
+  remove a group at any time.
 - **Numbers**: add phone numbers (digits with the country code, e.g. `923001234567`) and switch
   each one **Active** or **Disabled**. **The bot only answers active numbers**, for calculations and
-  for `/calculate`. Everyone else is ignored silently. A new install has no numbers, so add yours
-  first. People who were ignored are listed under *Recently ignored* with an Add button, which is
-  the easiest way to add someone.
+  for `/calculate` and `/groupid`. Everyone else is ignored silently. A new install has no numbers,
+  so add yours first.
 - **Account**: change the password. Changing it signs every other device out.
 
 Changes reach the bot within about 5 seconds. WhatsApp sometimes identifies a sender by an
 internal id (ending `@lid`) instead of a phone number. The bot looks up the real number when it
-can; when it cannot, *Recently ignored* shows the internal id, and adding that works the same way.
+can. If a number you added still gets no reply, find the ids the bot saw for that sender and add
+the one that is a phone number (or the internal id) as a number:
+`docker compose logs --tail 100 bot | grep "Ignoring a sender"`. Each line lists the `identifiers`.
 
 ### Setting up the website on your domain (Docker)
 

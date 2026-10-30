@@ -79,7 +79,7 @@ function createWebApp({ adminRepository, accessRepository, logger, now = Date.no
     res.set({
       'Cache-Control': 'no-store',
       'Content-Security-Policy':
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+        "default-src 'none'; style-src 'unsafe-inline'; img-src data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
       'X-Frame-Options': 'DENY',
       'X-Content-Type-Options': 'nosniff',
       'Referrer-Policy': 'no-referrer'
@@ -167,19 +167,25 @@ function createWebApp({ adminRepository, accessRepository, logger, now = Date.no
     if (!GROUP_ID_PATTERN.test(groupId)) return res.redirect('/groups?err=bad-group');
     const { label, error } = parseLabel(req.body.label);
     if (error) return res.redirect('/groups?err=bad-label');
+    if (!label) return res.redirect('/groups?err=label-required');
 
     await accessRepository.setGroupLabel(groupId, label);
-    return res.redirect(`/groups?ok=${label ? 'label-saved' : 'label-cleared'}`);
+    return res.redirect('/groups?ok=label-saved');
+  }));
+
+  app.post('/groups/remove', wrap(async (req, res) => {
+    const groupId = String(req.body.group_id || '').trim();
+    if (!GROUP_ID_PATTERN.test(groupId)) return res.redirect('/groups?err=bad-group');
+
+    await accessRepository.removeGroup(groupId);
+    return res.redirect('/groups?ok=group-removed');
   }));
 
   // --- numbers -------------------------------------------------------------------------------
 
   app.get('/numbers', wrap(async (req, res) => {
-    const [numbers, ignored] = await Promise.all([
-      accessRepository.listNumbers(),
-      accessRepository.listIgnoredSenders()
-    ]);
-    res.send(views.numbersPage({ session: req.session, query: req.query, numbers, ignored }));
+    const numbers = await accessRepository.listNumbers();
+    res.send(views.numbersPage({ session: req.session, query: req.query, numbers }));
   }));
 
   app.post('/numbers/add', wrap(async (req, res) => {

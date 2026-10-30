@@ -1,7 +1,6 @@
 const { normalizeNumber } = require('../utils/phone');
 
 const DEFAULT_TTL_MS = 5000;
-const IGNORED_SENDER_REPEAT_MS = 10 * 60 * 1000;
 
 // What the bot reads on every message: the active numbers and the group labels. They are edited
 // from the website (a separate process), so they are cached for a few seconds instead of
@@ -14,8 +13,6 @@ class AccessSettings {
     this.logger = logger;
     this.snapshot = null;
     this.loading = null;
-    this.knownGroups = new Set();
-    this.ignoredAt = new Map();
   }
 
   async load() {
@@ -56,25 +53,6 @@ class AccessSettings {
   async getGroupLabel(groupId) {
     const { labels } = await this.load();
     return labels.get(groupId) || null;
-  }
-
-  // Registers a group on the website the first time the bot is addressed in it.
-  async noteGroup(groupId, detectedName) {
-    if (this.knownGroups.has(groupId)) return;
-    await this.repository.upsertGroup(groupId, detectedName);
-    this.knownGroups.add(groupId);
-  }
-
-  // Remembers who was ignored so the website can offer to add them. Throttled per sender.
-  async noteIgnoredSender({ senderId, identifiers, pushName, groupId }) {
-    const last = this.ignoredAt.get(senderId);
-    if (last !== undefined && this.now() - last < IGNORED_SENDER_REPEAT_MS) return;
-    this.ignoredAt.set(senderId, this.now());
-    // Prefer a resolved phone number over the raw (possibly @lid) id.
-    const rawDigits = normalizeNumber(senderId);
-    const number = identifiers.find((id) => id !== rawDigits) || identifiers[0] || '';
-    if (!number) return;
-    await this.repository.recordIgnoredSender({ senderId, number, pushName, groupId });
   }
 }
 

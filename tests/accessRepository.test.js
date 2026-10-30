@@ -16,7 +16,7 @@ function createFakePool(respond = () => ({ rows: [], rowCount: 0 })) {
   };
 }
 
-test('addNumber upserts as active and removes the number from the ignored list', async () => {
+test('addNumber upserts the number as active', async () => {
   const pool = createFakePool();
 
   await new AccessRepository(pool).addNumber('923001234567', 'Ali');
@@ -24,8 +24,7 @@ test('addNumber upserts as active and removes the number from the ignored list',
   assert.match(pool.statements[0].sql, /^INSERT INTO allowed_numbers/);
   assert.match(pool.statements[0].sql, /ON CONFLICT\(number\) DO UPDATE SET active=TRUE/);
   assert.deepEqual(pool.statements[0].params, ['923001234567', 'Ali']);
-  assert.match(pool.statements[1].sql, /^DELETE FROM ignored_senders WHERE number=\$1/);
-  assert.deepEqual(pool.statements[1].params, ['923001234567']);
+  assert.equal(pool.statements.length, 1);
 });
 
 test('addNumber stores an empty label as null', async () => {
@@ -52,33 +51,41 @@ test('listActiveNumbers returns only the digit strings', async () => {
   assert.match(pool.statements[0].sql, /WHERE active = TRUE/);
 });
 
-test('setGroupLabel upserts, and an empty label clears it', async () => {
+test('setGroupLabel adds the group or renames it', async () => {
   const pool = createFakePool();
-  const repository = new AccessRepository(pool);
 
-  await repository.setGroupLabel('g@g.us', 'Hammad');
-  await repository.setGroupLabel('g@g.us', '');
+  await new AccessRepository(pool).setGroupLabel('g@g.us', 'Hammad');
 
   assert.match(pool.statements[0].sql, /^INSERT INTO bot_groups\(group_id, label\)/);
+  assert.match(pool.statements[0].sql, /ON CONFLICT\(group_id\) DO UPDATE SET label=EXCLUDED\.label/);
   assert.deepEqual(pool.statements[0].params, ['g@g.us', 'Hammad']);
-  assert.deepEqual(pool.statements[1].params, ['g@g.us', null]);
 });
 
-test('listGroups covers groups from both bot_groups and calculation_balances', async () => {
+test('removeGroup deletes the group and reports whether it existed', async () => {
+  const found = createFakePool(() => ({ rowCount: 1 }));
+  const missing = createFakePool(() => ({ rowCount: 0 }));
+
+  assert.equal(await new AccessRepository(found).removeGroup('g@g.us'), true);
+  assert.match(found.statements[0].sql, /^DELETE FROM bot_groups WHERE group_id=\$1/);
+  assert.deepEqual(found.statements[0].params, ['g@g.us']);
+  assert.equal(await new AccessRepository(missing).removeGroup('x@g.us'), false);
+});
+
+test('listGroups returns only groups that were added with a name', async () => {
   const pool = createFakePool();
 
   await new AccessRepository(pool).listGroups();
 
-  assert.match(pool.statements[0].sql, /SELECT group_id FROM bot_groups UNION SELECT group_id FROM calculation_balances/);
+  assert.match(pool.statements[0].sql, /FROM bot_groups g LEFT JOIN calculation_balances b/);
+  assert.match(pool.statements[0].sql, /WHERE g\.label IS NOT NULL AND g\.label <> ''/);
+  assert.doesNotMatch(pool.statements[0].sql, /UNION/);
 });
 
-test('listIgnoredSenders hides senders whose number is now active', async () => {
-  const pool = createFakePool();
+test('listGroupLabels reads only named groups', async () => {
+  const pool = createFakePool(() => ({ rows: [{ group_id: 'g@g.us', label: 'Hammad' }] }));
 
-  await new AccessRepository(pool).listIgnoredSenders(10);
-
-  assert.match(pool.statements[0].sql, /s\.number NOT IN \(SELECT number FROM allowed_numbers WHERE active = TRUE\)/);
-  assert.deepEqual(pool.statements[0].params, [10]);
+  assert.deepEqual(await new AccessRepository(pool).listGroupLabels(), [{ group_id: 'g@g.us', label: 'Hammad' }]);
+  assert.match(pool.statements[0].sql, /label IS NOT NULL/);
 });
 
 test('sessions store only a hash of the token', async () => {

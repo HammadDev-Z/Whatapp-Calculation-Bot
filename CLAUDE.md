@@ -51,14 +51,16 @@ A second process, the admin website (`src/web/`, `npm run web`), shares the same
    in `finally`) → **sender allowlist**: `resolveSender` collects every id of the sender as digits
    (raw `author` digits, `getContact()` number/id, `client.getContactLidAndPhone`; cached per author
    only when the contact lookup succeeded) and `accessSettings.isSenderAllowed` needs one of them to
-   be an **active** row in `allowed_numbers`; otherwise the message is dropped silently after
-   `noteIgnoredSender` + `noteGroup` (so the website can offer to add them) →
+   be an **active** row in `allowed_numbers`; otherwise the message is dropped silently after an
+   info log `Ignoring a sender who is not on the allowed numbers list` with the ids (the only way
+   to find which id to add) →
    `sender = author || from` stored raw (may be `@lid`) → `resolveGroupName` (best
    effort, never throws; successful names cached per group per process, so renames need a restart; warns once per group per process when null) → `calculationRepository.record`
    (`duplicate` → silent) → `accessSettings.getGroupLabel` → `message.reply` immediately (no delay).
    The header is `MUSHFIK X <LABEL UPPER-CASED>` when the group has a label, else `MUSHFIK STORE`.
-4. Otherwise `parseCommand` — only `/calculate` (`^/calculate\s*$`i on the trimmed body). The same
-   sender allowlist applies first. Then allowed if
+4. Otherwise `parseCommand` — `/calculate` (`^/calculate\s*$`i) and `/groupid` (`^/groupid\s*$`i), on
+   the trimmed body. The same sender allowlist applies first. `/groupid` then replies with the bare
+   `groupId` (so the admin can paste it into the website). `/calculate` is then allowed if
    `groupId === reportGroupId` or `calculateAccessRepository.isAllowed(groupId)`; else silent. Replies
    immediately.
 5. Every error is caught and logged as `Message processing failed`; **nothing is ever sent to the
@@ -77,13 +79,16 @@ Express, server-rendered HTML with no client JS (`views.js`), started by `src/we
 from a reverse proxy on the host: the production server uses its existing nginx plus certbot, and
 the optional `caddy` compose service (`--profile caddy`, `Caddyfile`) is for hosts with free ports
 80/443. The proxy must send `X-Forwarded-Proto`/`X-Forwarded-For` (the app sets `trust proxy` to 1).
-Pages: Groups (label per group id → receipt header), Numbers (add, Active/Disabled toggle,
-"Recently ignored" senders with one-click Add), Account (change password). Auth: scrypt hashes
+Pages: Groups (only groups the admin added by id — `listGroups` returns rows with a label, so it
+is empty at first; add/rename/remove; label → receipt header), Numbers (add, Active/Disabled switch),
+Account (change password). Layout is responsive: sidebar on laptops, top bar + bottom tab bar and
+stacked cards on phones (≤900px / ≤640px breakpoints in `views.js`). Auth: scrypt hashes
 (`src/utils/password.js`), DB-backed sessions in `admin_sessions` (only a SHA-256 of the cookie token
 is stored; `HttpOnly`, `SameSite=Strict`, `Secure` behind HTTPS), per-session CSRF token in every form,
 separate double-submit token for the login form, in-memory login rate limit. The first admin is seeded
 from `ADMIN_USERNAME`/`ADMIN_PASSWORD` only when `admin_users` is empty. Tables: `admin_users`,
-`admin_sessions`, `allowed_numbers`, `bot_groups`, `ignored_senders`. `tests/web.test.js` drives the
+`admin_sessions`, `allowed_numbers`, `bot_groups` (`group_id`, `label`; older databases may still
+have a spare `detected_name` column and an unused `ignored_senders` table — harmless). `tests/web.test.js` drives the
 real app over HTTP with in-memory fake repositories.
 
 ### Parser (`src/services/calculatorService.js`)
@@ -117,7 +122,7 @@ null auto-detected name never overwrites a stored one. `pg` returns `NUMERIC` as
 
 `listBalances` returns only `active = TRUE` rows ordered by `COALESCE(group_name, group_id)`.
 `calculate_access_groups` and `calculation_balances.active` have no command or UI — they are managed in SQL.
-Numbers, group labels and ignored senders live in `accessRepository.js` and are managed on the website.
+Numbers and group labels live in `accessRepository.js` and are managed on the website.
 
 `database/schema.sql` is re-applied in full on every migrate/`docker compose up`, so every statement must
 be idempotent (`IF NOT EXISTS`). The legacy `groups` / `transactions` tables from the previous bot

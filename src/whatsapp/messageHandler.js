@@ -10,7 +10,10 @@ const REPLY_SUBHEADER = '🤖 Start To Work';
 const ALL_CLEAR_LINE = '✅ Thanks! All clear.';
 const NO_BALANCES_TEXT = '📊 No group calculations have been recorded yet.';
 
-const CALCULATE_COMMAND_PATTERN = /^\/calculate\s*$/i;
+const COMMAND_PATTERNS = {
+  calculate: /^\/calculate\s*$/i,
+  groupid: /^\/groupid\s*$/i
+};
 
 function wid(value) {
   if (!value) return '';
@@ -50,7 +53,6 @@ const digitsOf = (value) => normalizeNumber(String(value || '').split('@')[0]);
 async function resolveSender(message) {
   const senderId = String(message.author || message.from || '');
   const identifiers = new Set([digitsOf(senderId)]);
-  const pushName = message._data?.notifyName || null;
   let resolved = false;
 
   try {
@@ -70,14 +72,15 @@ async function resolveSender(message) {
   }
 
   identifiers.delete('');
-  return { senderId, identifiers: [...identifiers], pushName, resolved };
+  return { senderId, identifiers: [...identifiers], resolved };
 }
 
 // Only consulted when the body is not a calculation.
 function parseCommand(body) {
   if (typeof body !== 'string') return null;
-  if (CALCULATE_COMMAND_PATTERN.test(body.trim())) return { name: 'calculate' };
-  return null;
+  const text = body.trim();
+  const name = Object.keys(COMMAND_PATTERNS).find((candidate) => COMMAND_PATTERNS[candidate].test(text));
+  return name ? { name } : null;
 }
 
 // "Cur Total" is this message's amount; "All Total" is the group's new running balance.
@@ -149,17 +152,16 @@ function createMessageHandler({
   }
 
   // Only numbers that are added and active on the website get a response. Everyone else is
-  // ignored silently, but remembered so the website can offer to add them.
+  // ignored silently; the log line shows the ids to add if a number should have matched.
   async function isSenderAllowed(message, groupId) {
     const sender = await getSender(message);
     if (await accessSettings.isSenderAllowed(sender.identifiers)) return true;
 
-    try {
-      await accessSettings.noteIgnoredSender({ ...sender, groupId });
-      await accessSettings.noteGroup(groupId, await getGroupName(message, groupId));
-    } catch (error) {
-      logger.warn('Could not record ignored sender', { groupId, error: error.message || String(error) });
-    }
+    logger.info('Ignoring a sender who is not on the allowed numbers list', {
+      groupId,
+      senderId: sender.senderId,
+      identifiers: sender.identifiers
+    });
     return false;
   }
 
@@ -202,6 +204,11 @@ function createMessageHandler({
     await message.reply(buildCalculateReport(balances));
   }
 
+  async function handleGroupId(message, groupId) {
+    if (!await isSenderAllowed(message, groupId)) return;
+    await message.reply(groupId);
+  }
+
   return async function onMessage(message) {
     if (!message || message.fromMe) return;
     const groupId = String(message.from || '');
@@ -220,6 +227,7 @@ function createMessageHandler({
       if (!command) return;
       logger.info('WhatsApp command received', { command: command.name, groupId, messageId });
       if (command.name === 'calculate') await handleCalculate(message, groupId);
+      if (command.name === 'groupid') await handleGroupId(message, groupId);
     } catch (error) {
       // Deliberately silent in the group: failures are only logged.
       logger.error('Message processing failed', {

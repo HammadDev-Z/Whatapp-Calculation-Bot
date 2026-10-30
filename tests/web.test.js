@@ -12,13 +12,7 @@ function createRepositories() {
     admins: [{ id: 1, username: 'admin', password_hash: hashPassword(PASSWORD) }],
     sessions: new Map(),
     numbers: [],
-    groups: [
-      { group_id: 'g1@g.us', detected_name: 'Karachi <b>Buyers</b>', label: null, current_total: '12.50' },
-      { group_id: 'g2@g.us', detected_name: 'Lahore', label: 'Hammad', current_total: null }
-    ],
-    ignored: [
-      { sender_id: '256@lid', number: '923009999999', push_name: 'Bilal', message_count: 3, last_seen_at: new Date('2026-10-30T10:00:00Z'), group_name: 'Lahore' }
-    ],
+    groups: [],
     calls: []
   };
 
@@ -50,9 +44,17 @@ function createRepositories() {
 
   const accessRepository = {
     async listGroups() { return state.groups; },
-    async setGroupLabel(groupId, label) { state.calls.push(['setGroupLabel', groupId, label]); },
+    async setGroupLabel(groupId, label) {
+      state.calls.push(['setGroupLabel', groupId, label]);
+      const row = state.groups.find((g) => g.group_id === groupId);
+      if (row) row.label = label; else state.groups.push({ group_id: groupId, label, current_total: null });
+    },
+    async removeGroup(groupId) {
+      state.calls.push(['removeGroup', groupId]);
+      state.groups = state.groups.filter((g) => g.group_id !== groupId);
+      return true;
+    },
     async listNumbers() { return state.numbers; },
-    async listIgnoredSenders() { return state.ignored; },
     async addNumber(number, label) {
       state.calls.push(['addNumber', number, label]);
       state.numbers.push({ number, label, active: true, created_at: new Date() });
@@ -211,9 +213,25 @@ test('state-changing requests without the form token are refused', async (t) => 
   assert.deepEqual(server.state.calls, []);
 });
 
-test('the groups page lists groups, escapes names and previews the header', async (t) => {
+test('the groups page starts empty: no groups are listed until you add one', async (t) => {
   const server = await start();
   t.after(server.close);
+  const { browser } = await signIn(server);
+
+  const html = await (await browser.get('/groups')).text();
+
+  assert.match(html, /No groups yet/);
+  assert.match(html, /\/groupid/);
+  assert.doesNotMatch(html, /Recently ignored/);
+});
+
+test('added groups are listed with an escaped name, their id and a header preview', async (t) => {
+  const server = await start();
+  t.after(server.close);
+  server.state.groups.push(
+    { group_id: 'g1@g.us', label: 'Karachi <b>Buyers</b>', detected_name: 'x', current_total: '12.50' },
+    { group_id: 'g2@g.us', label: 'Hammad', current_total: null }
+  );
   const { browser } = await signIn(server);
 
   const html = await (await browser.get('/groups')).text();
@@ -221,25 +239,51 @@ test('the groups page lists groups, escapes names and previews the header', asyn
   assert.match(html, /Karachi &lt;b&gt;Buyers&lt;\/b&gt;/);
   assert.doesNotMatch(html, /<b>Buyers<\/b>/);
   assert.match(html, /g1@g\.us/);
-  assert.match(html, /Header: <b>MUSHFIK STORE<\/b>/);
-  assert.match(html, /Header: <b>MUSHFIK X HAMMAD<\/b>/);
+  assert.match(html, /MUSHFIK X HAMMAD/);
+  assert.match(html, /MUSHFIK X KARACHI &lt;B&gt;BUYERS&lt;\/B&gt;/);
+  assert.match(html, /Balance <b>12\.50<\/b>/);
 });
 
-test('saving a group name stores it trimmed, and an empty name clears it', async (t) => {
+test('adding a group stores its id and trimmed name, and it then appears in the list', async (t) => {
   const server = await start();
   t.after(server.close);
   const { browser } = await signIn(server);
   const _csrf = await csrfOf(browser);
 
-  const saved = await browser.post('/groups/label', { _csrf, group_id: 'g1@g.us', label: '  Ali Khan ' });
-  const cleared = await browser.post('/groups/label', { _csrf, group_id: 'g2@g.us', label: '' });
+  const added = await browser.post('/groups/label', { _csrf, group_id: ' 120363012345678901@g.us ', label: '  Ali Khan ' });
+  const html = await (await browser.get('/groups')).text();
 
-  assert.equal(saved.headers.get('location'), '/groups?ok=label-saved');
-  assert.equal(cleared.headers.get('location'), '/groups?ok=label-cleared');
-  assert.deepEqual(server.state.calls, [
-    ['setGroupLabel', 'g1@g.us', 'Ali Khan'],
-    ['setGroupLabel', 'g2@g.us', '']
-  ]);
+  assert.equal(added.headers.get('location'), '/groups?ok=label-saved');
+  assert.deepEqual(server.state.calls, [['setGroupLabel', '120363012345678901@g.us', 'Ali Khan']]);
+  assert.match(html, /120363012345678901@g\.us/);
+  assert.match(html, /MUSHFIK X ALI KHAN/);
+});
+
+test('removing a group takes it off the list', async (t) => {
+  const server = await start();
+  t.after(server.close);
+  server.state.groups.push({ group_id: 'g1@g.us', label: 'Hammad', current_total: null });
+  const { browser } = await signIn(server);
+  const _csrf = await csrfOf(browser);
+
+  const removed = await browser.post('/groups/remove', { _csrf, group_id: 'g1@g.us' });
+  const html = await (await browser.get('/groups')).text();
+
+  assert.equal(removed.headers.get('location'), '/groups?ok=group-removed');
+  assert.deepEqual(server.state.calls, [['removeGroup', 'g1@g.us']]);
+  assert.match(html, /No groups yet/);
+});
+
+test('removing with a bad group id is refused', async (t) => {
+  const server = await start();
+  t.after(server.close);
+  const { browser } = await signIn(server);
+  const _csrf = await csrfOf(browser);
+
+  const response = await browser.post('/groups/remove', { _csrf, group_id: 'nonsense' });
+
+  assert.equal(response.headers.get('location'), '/groups?err=bad-group');
+  assert.deepEqual(server.state.calls, []);
 });
 
 test('group ids and names are validated', async (t) => {
@@ -251,10 +295,12 @@ test('group ids and names are validated', async (t) => {
   const badId = await browser.post('/groups/label', { _csrf, group_id: '923001234567@c.us', label: 'x' });
   const multiline = await browser.post('/groups/label', { _csrf, group_id: 'g1@g.us', label: 'one\ntwo' });
   const tooLong = await browser.post('/groups/label', { _csrf, group_id: 'g1@g.us', label: 'x'.repeat(41) });
+  const empty = await browser.post('/groups/label', { _csrf, group_id: 'g1@g.us', label: '   ' });
 
   assert.equal(badId.headers.get('location'), '/groups?err=bad-group');
   assert.equal(multiline.headers.get('location'), '/groups?err=bad-label');
   assert.equal(tooLong.headers.get('location'), '/groups?err=bad-label');
+  assert.equal(empty.headers.get('location'), '/groups?err=label-required');
   assert.deepEqual(server.state.calls, []);
 });
 
@@ -286,10 +332,12 @@ test('a number can be deactivated and activated again', async (t) => {
 
   assert.equal(off.headers.get('location'), '/numbers?ok=number-off');
   assert.match(offPage, /class="pill off">Disabled/);
-  assert.match(offPage, />Activate</);
+  assert.match(offPage, /aria-checked="false"/);
+  assert.match(offPage, />Activate 923001234567</);
   assert.equal(on.headers.get('location'), '/numbers?ok=number-on');
   assert.match(onPage, /class="pill on">Active/);
-  assert.match(onPage, />Deactivate</);
+  assert.match(onPage, /aria-checked="true"/);
+  assert.match(onPage, />Deactivate 923001234567</);
 });
 
 test('toggling an unknown number or sending a bad value is refused', async (t) => {
@@ -305,16 +353,32 @@ test('toggling an unknown number or sending a bad value is refused', async (t) =
   assert.equal(badValue.headers.get('location'), '/numbers?err=bad-request');
 });
 
-test('the numbers page offers ignored senders with an Add button', async (t) => {
+test('the numbers page has no "recently ignored" list, only the allowed numbers', async (t) => {
   const server = await start();
   t.after(server.close);
+  server.state.numbers.push({ number: '923001234567', label: 'Ali', active: true, created_at: new Date() });
   const { browser } = await signIn(server);
 
   const html = await (await browser.get('/numbers')).text();
 
-  assert.match(html, /923009999999/);
-  assert.match(html, /Bilal/);
-  assert.match(html, /name="number" value="923009999999"/);
+  assert.doesNotMatch(html, /Recently ignored/i);
+  assert.match(html, /923001234567/);
+  assert.match(html, /Ali/);
+  assert.match(html, /<b>1<\/b> active/);
+});
+
+test('the pages are laid out for phones and laptops', async (t) => {
+  const server = await start();
+  t.after(server.close);
+  const { browser } = await signIn(server);
+
+  for (const path of ['/groups', '/numbers', '/account']) {
+    const html = await (await browser.get(path)).text();
+    assert.match(html, /<meta name="viewport" content="width=device-width, initial-scale=1/);
+    assert.match(html, /@media \(max-width:900px\)/);
+    assert.match(html, /class="tabbar"/);
+    assert.match(html, /class="side"/);
+  }
 });
 
 test('changing the password checks the current one and signs other devices out', async (t) => {

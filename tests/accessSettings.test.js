@@ -6,8 +6,6 @@ function createRepository({ numbers = ['923001234567'], labels = [{ group_id: 'g
   const repository = {
     loads: 0,
     failing: false,
-    groups: [],
-    ignored: [],
     async listActiveNumbers() {
       repository.loads += 1;
       if (repository.failing) throw new Error('db down');
@@ -17,8 +15,6 @@ function createRepository({ numbers = ['923001234567'], labels = [{ group_id: 'g
       if (repository.failing) throw new Error('db down');
       return labels;
     },
-    async upsertGroup(groupId, name) { repository.groups.push([groupId, name]); },
-    async recordIgnoredSender(details) { repository.ignored.push(details); }
   };
   return repository;
 }
@@ -96,46 +92,4 @@ test('fails when the very first load fails, so the message is dropped', async ()
   await assert.rejects(settings.isSenderAllowed(['923001234567']), /db down/);
   repository.failing = false;
   assert.equal(await settings.isSenderAllowed(['923001234567']), true);
-});
-
-test('registers a group only once per process', async () => {
-  const repository = createRepository();
-  const { settings } = createSettings(repository);
-
-  await settings.noteGroup('g@g.us', 'Karachi Buyers');
-  await settings.noteGroup('g@g.us', 'Karachi Buyers');
-
-  assert.deepEqual(repository.groups, [['g@g.us', 'Karachi Buyers']]);
-});
-
-test('records an ignored sender with the resolved phone number, throttled per sender', async () => {
-  const repository = createRepository();
-  const { settings, clock } = createSettings(repository);
-  const details = {
-    senderId: '256577252638929@lid',
-    identifiers: ['256577252638929', '923001234567'],
-    pushName: 'Ali',
-    groupId: 'g@g.us'
-  };
-
-  await settings.noteIgnoredSender(details);
-  await settings.noteIgnoredSender(details);
-  assert.deepEqual(repository.ignored, [{
-    senderId: '256577252638929@lid', number: '923001234567', pushName: 'Ali', groupId: 'g@g.us'
-  }]);
-
-  clock.time += 11 * 60 * 1000;
-  await settings.noteIgnoredSender(details);
-  assert.equal(repository.ignored.length, 2);
-});
-
-test('falls back to the raw id digits when no phone number could be resolved', async () => {
-  const repository = createRepository();
-  const { settings } = createSettings(repository);
-
-  await settings.noteIgnoredSender({
-    senderId: '256577252638929@lid', identifiers: ['256577252638929'], pushName: null, groupId: 'g@g.us'
-  });
-
-  assert.equal(repository.ignored[0].number, '256577252638929');
 });
