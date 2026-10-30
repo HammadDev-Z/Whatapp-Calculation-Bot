@@ -71,12 +71,19 @@ services:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       LOG_LEVEL: ${LOG_LEVEL:-info}
     command: ["npm", "run", "web"]
+    # Reachable from this server only. A reverse proxy running on the server (your own nginx, or the
+    # optional Caddy below) forwards https://SITE_DOMAIN to it.
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-3100}:3000"
 
-  # HTTPS for the website. Needs ports 80 and 443 open and SITE_DOMAIN pointing at this server.
+  # Optional HTTPS front for the website, for a server whose ports 80 and 443 are free:
+  #   docker compose --profile caddy up -d
+  # Skip it if nginx (or another web server) already uses those ports; see the README.
   caddy:
     image: caddy:2-alpine
     container_name: whatsapp-calculator-caddy
     restart: unless-stopped
+    profiles: ["caddy"]
     depends_on:
       - web
     environment:

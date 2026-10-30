@@ -73,7 +73,10 @@ dropped). The website is a separate process, so edits there reach the bot within
 ### Website (`src/web/`)
 
 Express, server-rendered HTML with no client JS (`views.js`), started by `src/web/index.js`
-(`npm run web`, own Docker service behind a Caddy container that does HTTPS for `SITE_DOMAIN`).
+(`npm run web`, own Docker service published on `127.0.0.1:${WEB_HOST_PORT:-3100}` only). HTTPS comes
+from a reverse proxy on the host: the production server uses its existing nginx plus certbot, and
+the optional `caddy` compose service (`--profile caddy`, `Caddyfile`) is for hosts with free ports
+80/443. The proxy must send `X-Forwarded-Proto`/`X-Forwarded-For` (the app sets `trust proxy` to 1).
 Pages: Groups (label per group id → receipt header), Numbers (add, Active/Disabled toggle,
 "Recently ignored" senders with one-click Add), Account (change password). Auth: scrypt hashes
 (`src/utils/password.js`), DB-backed sessions in `admin_sessions` (only a SHA-256 of the cookie token

@@ -256,8 +256,33 @@ can; when it cannot, *Recently ignored* shows the internal id, and adding that w
    to the registrar's real DNS or change its nameservers to a DNS host (for example Cloudflare), and
    create the A record there. DNS can take from a few minutes to a few hours.
 3. Open ports **80 and 443** on the server's firewall or cloud security group.
-4. Run `docker compose up --build -d`. Caddy requests and renews the HTTPS certificate by itself
-   once the A record resolves. Check with `docker compose logs -f caddy`.
+4. Start it and add HTTPS in front of it. Pick the one that matches your server:
+   - **Ports 80 and 443 are free:** run `docker compose --profile caddy up --build -d`. Caddy
+     requests and renews the HTTPS certificate by itself once the A record resolves. Check with
+     `docker compose logs -f caddy`.
+   - **nginx (or another web server) already uses them:** run `docker compose up --build -d`. The
+     website then listens on `127.0.0.1:3100` (change it with `WEB_HOST_PORT`). Add an nginx site
+     that forwards your domain to it:
+
+     ```nginx
+     server {
+         listen 80;
+         server_name codeguy.pp.ua;
+
+         location / {
+             proxy_pass http://127.0.0.1:3100;
+             proxy_set_header Host $host;
+             proxy_set_header X-Real-IP $remote_addr;
+             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+             proxy_set_header X-Forwarded-Proto $scheme;
+         }
+     }
+     ```
+
+     Save it as `/etc/nginx/sites-available/calculator-site`, link it into `sites-enabled`, run
+     `nginx -t && systemctl reload nginx`, then `certbot --nginx -d codeguy.pp.ua` to get the
+     HTTPS certificate. Keep the `X-Forwarded-Proto` line: the website uses it to mark its login
+     cookie as secure.
 5. Open `https://<your domain>` and sign in.
 
 Without Docker, run `npm run web` (or `pm2 start ecosystem.config.js`, which starts the bot and the
@@ -270,7 +295,7 @@ then `docker compose restart web`.
 
 ## Security
 
-- The website needs a login, uses HTTPS (through Caddy), hashes passwords with scrypt, rate-limits
+- The website needs a login, uses HTTPS (through nginx or Caddy), hashes passwords with scrypt, rate-limits
   failed sign-ins and protects forms against CSRF.
 - Does not use JavaScript `eval()`; expressions are parsed by a small hand-written evaluator.
 - Ignores all private chats, and any group message from a number that is not active on the website.
